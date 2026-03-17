@@ -1,5 +1,5 @@
+import typing as t
 from pathlib import Path
-from typing import t
 
 from enum_properties import StrEnumProperties
 

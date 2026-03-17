@@ -1,0 +1,9 @@
+[Unit]
+Description={{ settings.PROJECT_NAME|default:"Django" }} Periodic Check (app1)
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

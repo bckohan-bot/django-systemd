@@ -1,3 +1,4 @@
+import os
 import re
 import sys
 import typing as t
@@ -103,7 +104,7 @@ def template_engine_config() -> t.Dict[str, t.Any]:
         ),
     )
     engine_config["context"].setdefault(
-        "DJANGO_SETTINGS_MODULE", settings.SETTINGS_MODULE
+        "DJANGO_SETTINGS_MODULE", os.environ.get("DJANGO_SETTINGS_MODULE", "")
     )
     return engine_config
 

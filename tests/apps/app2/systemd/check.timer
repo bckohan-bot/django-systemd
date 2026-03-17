@@ -1,0 +1,9 @@
+[Unit]
+Description={{ settings.PROJECT_NAME|default:"Django" }} Periodic Check (app2 override)
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+
+[Install]
+WantedBy=timers.target

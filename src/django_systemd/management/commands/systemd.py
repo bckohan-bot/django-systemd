@@ -8,8 +8,13 @@ that renders, installs, removes and manages systemd units.
     :convert-png: latex
 """
 
-from functools import cached_property
+from __future__ import annotations
 
+from functools import cached_property
+from pathlib import Path
+from typing import Annotated, Optional
+
+import typer
 from django_typer.management import TyperCommand, command, initialize
 
 
@@ -21,87 +26,48 @@ class Command(TyperCommand):
         return render_engine()
 
     @initialize()
-    def init(self):
-        self.units = self.render_engine.search("")
+    def init(self) -> None:
+        # Materialise and deduplicate by name; first occurrence wins (app precedence).
+        seen: set[str] = set()
+        self.units = []
+        for tmpl in self.render_engine.search(""):
+            name = tmpl.name
+            if name is not None and name not in seen:
+                seen.add(name)
+                self.units.append(tmpl)
 
     @command()
-    def list(self):
-        """List available systemd units."""
-        self.print_commands()
+    def list(self) -> None:
+        """List available systemd unit templates."""
+        if not self.units:
+            typer.echo("No systemd unit templates found.")
+            return
+        for tmpl in self.units:
+            typer.echo(f"{tmpl.name:<40} {tmpl.origin}")
 
-    # @command()
-    # def validate(self):
-    #     """Validate the systemd service file for this Django project."""
-    #     from django_systemd.utils import validate_service_file
+    @command()
+    def render(
+        self,
+        output_dir: Annotated[
+            Optional[Path],
+            typer.Argument(help="Directory to render templates into."),
+        ] = None,
+    ) -> None:
+        """Render systemd unit templates to a directory."""
+        from django.template.exceptions import TemplateDoesNotExist
 
-    #     validate_service_file()
+        from django_systemd.config import template_engine_config
 
-    # @command()
-    # def install(self):
-    #     """Install the systemd service file for this Django project."""
-    #     from django_systemd.utils import install_service_file
-
-    #     install_service_file()
-
-    # @command()
-    # def uninstall(self):
-    #     """Uninstall the systemd service file for this Django project."""
-    #     from django_systemd.utils import uninstall_service_file
-
-    #     uninstall_service_file()
-
-    # @command()
-    # def status(self):
-    #     """Check the status of the systemd service for this Django project."""
-    #     from django_systemd.utils import check_service_status
-
-    #     check_service_status()
-
-    # @command()
-    # def restart(self):
-    #     """Restart the systemd service for this Django project."""
-    #     from django_systemd.utils import restart_service
-
-    #     restart_service()
-
-    # @command()
-    # def start(self):
-    #     """Start the systemd service for this Django project."""
-    #     from django_systemd.utils import start_service
-
-    #     start_service()
-
-    # @command()
-    # def stop(self):
-    #     """Stop the systemd service for this Django project."""
-    #     from django_systemd.utils import stop_service
-
-    #     stop_service()
-
-    # @command()
-    # def enable(self):
-    #     """Enable the systemd service for this Django project."""
-    #     from django_systemd.utils import enable_service
-
-    #     enable_service()
-
-    # @command()
-    # def disable(self):
-    #     """Disable the systemd service for this Django project."""
-    #     from django_systemd.utils import disable_service
-
-    #     disable_service()
-
-    # @command()
-    # def logs(self, lines: int = 100):
-    #     """View the logs of the systemd service for this Django project."""
-    #     from django_systemd.utils import view_service_logs
-
-    #     view_service_logs(lines=lines)
-
-    # @command()
-    # def status(self):
-    #     """Check the verbose status of the systemd service for this Django project."""
-    #     from django_systemd.utils import check_service_status_verbose
-
-    #     check_service_status_verbose()
+        dest = output_dir or Path(".")
+        dest.mkdir(parents=True, exist_ok=True)
+        patterns: list[str] = template_engine_config()["templates"]
+        rendered = 0
+        for pattern in patterns:
+            try:
+                for r in self.render_engine.render_each(pattern, dest=str(dest)):
+                    typer.echo(str(r.destination))
+                    rendered += 1
+            except TemplateDoesNotExist:
+                pass
+        if not rendered:
+            typer.echo("No unit templates found.", err=True)

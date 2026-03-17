@@ -1,0 +1,5 @@
+[Unit]
+Description={{ settings.PROJECT_NAME|default:"Django" }} Instance %i (app1)
+
+[Install]
+WantedBy=multi-user.target

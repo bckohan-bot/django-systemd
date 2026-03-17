@@ -32,7 +32,7 @@ A number of convenient environment context variables are added to the context. S
 Default:
 
 .. code-block:: python
-    
+
     {
         "ENGINES": [{
             "BACKEND": "render_static.backends.StaticDjangoTemplates",
@@ -72,7 +72,7 @@ file with a standard systemd unit file extension. The :func:`~glob.glob` pattern
 Default:
 
     .. code-block:: python
-        
+
         [
             "**/*.service", "**/*.socket", "**/*.target", "**/*.timer", "**/*.path",
             "**/*.mount", "**/*.automount", "**/*.swap", "**/*.device", "**/*.scope",
@@ -90,8 +90,10 @@ dictionaries, but can be provided from :ref:`multiple sources <django-render-sta
 
 **These values will always be added to the context even if you provide your own context.**
 
-- ``DJANGO_SETTINGS_MODULE``: The value of the :envvar:`DJANGO_SETTINGS_MODULE` environment variable.
-- ``django-admin``: The name or path of the Django :doc:`management script <django:ref/django-admin>`.
+- ``DJANGO_SETTINGS_MODULE``: The value of the :envvar:`DJANGO_SETTINGS_MODULE` environment
+  variable.
+- ``django-admin``: The name or path of the Django
+  :doc:`management script <django:ref/django-admin>`.
 - ``python``: The path to the Python :py:data:`interpreter <python:sys.executable>`.
 - ``settings``: The Django :doc:`settings module <django:ref/settings>`.
 - ``venv``: The path to the active python :py:data:`environment <python:sys.prefix>`.

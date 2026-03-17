@@ -1,0 +1,13 @@
+[Unit]
+Description={{ settings.PROJECT_NAME|default:"Django" }} Web Service (app1)
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory={{ venv }}
+ExecStart={{ python }} -m gunicorn --workers 2 --bind unix:/run/app1.sock wsgi:application
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

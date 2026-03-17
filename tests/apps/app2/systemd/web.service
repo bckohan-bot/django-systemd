@@ -1,0 +1,15 @@
+[Unit]
+Description={{ settings.PROJECT_NAME|default:"Django" }} Web Service (app2 override)
+After=network.target postgresql.service
+
+[Service]
+Type=notify
+User=www-data
+WorkingDirectory={{ venv }}
+ExecStart={{ python }} -m gunicorn --workers 4 --bind unix:/run/app2.sock wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+Environment=DJANGO_SETTINGS_MODULE={{ DJANGO_SETTINGS_MODULE }}
+
+[Install]
+WantedBy=multi-user.target

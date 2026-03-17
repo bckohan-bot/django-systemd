@@ -1,0 +1,6 @@
+[Unit]
+Description={{ settings.PROJECT_NAME|default:"Django" }} Instance %i (app2 override)
+After=network.target
+
+[Install]
+WantedBy=multi-user.target

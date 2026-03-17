@@ -104,6 +104,7 @@ class SystemdCtl(Protocol):
         Return unit names. Typically maps to:
           systemctl list-units --no-legend --plain --state=...
         """
+        ...
 
     def list_unit_files(
         self, *, scope: SystemdScope = SystemdScope.SYSTEM
@@ -113,6 +114,7 @@ class SystemdCtl(Protocol):
         Typically maps to:
           systemctl list-unit-files --no-legend --plain
         """
+        ...
 
     # --- install units
     def install_unit(
@@ -141,6 +143,7 @@ class SystemdCtl(Protocol):
         Note: This is intentionally NOT `systemctl link` vs `install` vs "drop-ins";
               it's a pragmatic "copy into unit dir" operation.
         """
+        ...
 
     def uninstall_unit(
         self,
