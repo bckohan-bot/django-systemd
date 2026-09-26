@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from functools import cached_property
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 from django_typer.management import TyperCommand, command, initialize
@@ -49,7 +49,7 @@ class Command(TyperCommand):
     def render(
         self,
         output_dir: Annotated[
-            Optional[Path],
+            Path | None,
             typer.Argument(help="Directory to render templates into."),
         ] = None,
     ) -> None:

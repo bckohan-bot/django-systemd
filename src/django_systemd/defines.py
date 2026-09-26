@@ -1,4 +1,3 @@
-import typing as t
 from pathlib import Path
 
 from enum_properties import StrEnumProperties
@@ -53,7 +52,7 @@ class SystemdRestartType(StrEnumProperties):
 
 
 class SystemdScope(StrEnumProperties):
-    location: t.List[Path]
+    location: list[Path]
     description: str
 
     # fmt: off

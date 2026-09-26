@@ -4,7 +4,12 @@ This file is for Claude Code and other AI coding assistants working in this repo
 
 ## What This Repo Is
 
-**django-systemd** — Let your Django apps manage your systemd unit files and services.
+**django-systemd** — Is a django app that makes it easy to do two things - neither of which depend on each other.
+
+1. Generate systemd files. These files can be generated
+  1. At package time and committed to CI with known settings
+  2. At deploy time from live production settings
+2. Manage systemd units - installing/updating/listing them. We assume that systemd units are all meant to be run as the user not as root.
 
 A Django application library. Source lives in `src/django_systemd/`. Tests are in `tests/`. Documentation is in `doc/`.
 

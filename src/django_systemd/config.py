@@ -3,7 +3,7 @@ import re
 import sys
 import typing as t
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 from render_static.context import resolve_context
@@ -20,7 +20,7 @@ SERVICE_UNIT_REGEX = re.compile(rf"^(?P<name>[\w@-]+)\.(?P<type>{unit_types})$")
 class ServiceUnit:
     name: str
     unit_type: SystemdUnitType
-    path: t.Optional[Path] = None
+    path: Path | None = None
     instanceable: bool = False
 
     @classmethod
@@ -42,8 +42,8 @@ class ServiceUnit:
         raise ValueError(f"Unrecognized unit name: '{name}'")
 
 
-@lru_cache(maxsize=None)
-def service_units() -> t.Dict[str, ServiceUnit]:
+@cache
+def service_units() -> dict[str, ServiceUnit]:
     """
     Get a dictionary of all recognized systemd service unit types.
 
@@ -58,8 +58,8 @@ def service_units() -> t.Dict[str, ServiceUnit]:
     return units
 
 
-@lru_cache(maxsize=None)
-def template_engine_config() -> t.Dict[str, t.Any]:
+@cache
+def template_engine_config() -> dict[str, t.Any]:
     """
     Get the configuration for the systemd template rendering engine.
 
@@ -109,7 +109,7 @@ def template_engine_config() -> t.Dict[str, t.Any]:
     return engine_config
 
 
-@lru_cache(maxsize=None)
+@cache
 def render_engine() -> StaticTemplateEngine:
     """
     Get the configured rendering engine for systemd service units.
