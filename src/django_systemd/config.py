@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import sys
@@ -11,9 +12,11 @@ from render_static.engine import StaticTemplateEngine
 
 from .defines import SystemdUnitType
 
+logger = logging.getLogger(__name__)
+
 unit_types = "|".join(re.escape(typ.value) for typ in SystemdUnitType)
 
-SERVICE_UNIT_REGEX = re.compile(rf"^(?P<name>[\w@-]+)\.(?P<type>{unit_types})$")
+SERVICE_UNIT_REGEX = re.compile(rf"^(?P<name>[\w.@-]+)\.(?P<type>{unit_types})$")
 
 # The order units should be restarted in. Sockets must be up before the services
 # they activate, paths and timers trigger services so they go after. Anything not
@@ -66,7 +69,7 @@ class ServiceUnit:
                 name=mtch.groupdict()["name"],
                 unit_type=SystemdUnitType(mtch.groupdict()["type"]),
                 path=path,
-                instanceable="@" in name,
+                instanceable=mtch.groupdict()["name"].endswith("@"),
             )
         raise ValueError(f"Unrecognized unit name: '{name}'")
 
@@ -138,23 +141,26 @@ def project_units() -> list[ServiceUnit]:
     """
     The manifest: every systemd unit template bundled by an installed app.
 
-    Templates are yielded by the render engine in app precedence order, so when two
-    apps provide the same unit name the first one wins and later ones are dropped.
-    Files in a ``systemd/`` directory whose names are not ``<name>.<unit type>`` are
-    ignored.
+    The render engine resolves each template name to its highest-precedence app
+    and may yield that winner once per app that provides the name, so repeats are
+    collapsed here by unit file name. Files that match the discovery globs but are
+    not valid ``<name>.<unit type>`` names are skipped with a warning.
 
     :return: Units in discovery order, each with ``path`` set to its template.
     """
     seen: set[str] = set()
     units: list[ServiceUnit] = []
     for template in render_engine().search(""):
-        name = template.name
-        if not name or name in seen:
+        origin = Path(template.origin.name)
+        if origin.is_dir():
             continue
         try:
-            unit = ServiceUnit.parse(Path(str(template.origin)))
-        except ValueError:
+            unit = ServiceUnit.parse(origin)
+        except ValueError as err:
+            logger.warning("Ignoring %s: %s", origin, err)
             continue
-        seen.add(name)
+        if unit.filename in seen:
+            continue
+        seen.add(unit.filename)
         units.append(unit)
     return units

@@ -12,6 +12,7 @@ from typing import Sequence
 from unittest import mock
 
 import pytest
+from django.conf import settings
 from django.core.management import call_command
 from django.template.exceptions import TemplateDoesNotExist
 from django.test import TestCase, override_settings
@@ -211,6 +212,15 @@ class TestServiceUnit:
         assert prio(SystemdUnitType.TIMER) < prio(SystemdUnitType.TARGET)
         assert prio(SystemdUnitType.TARGET) == prio(SystemdUnitType.MOUNT)
 
+    def test_dotted_name(self):
+        unit = ServiceUnit.parse("my.app.timer")
+        assert unit.name == "my.app"
+        assert unit.unit_type == SystemdUnitType.TIMER
+
+    def test_instance_is_not_instanceable(self):
+        assert ServiceUnit.parse("worker@1.service").instanceable is False
+        assert ServiceUnit.parse("worker@.service").instanceable is True
+
 
 @pytest.mark.django_db
 class TestProjectUnits:
@@ -221,7 +231,7 @@ class TestProjectUnits:
     def test_highest_precedence_app_wins(self):
         for unit in project_units():
             assert unit.path is not None
-            assert "app2" in str(unit.path)
+            assert unit.path.parent.parent.name == "app2"
             assert unit.path.is_file()
 
     def test_no_duplicates(self):
@@ -238,6 +248,22 @@ class TestProjectUnits:
             template_engine_config.cache_clear()
             render_engine.cache_clear()
             assert project_units() == []
+
+    def test_nested_dotted_and_invalid_names(self, caplog):
+        apps = ["tests.apps.app3", *settings.INSTALLED_APPS]
+        with override_settings(INSTALLED_APPS=apps):
+            template_engine_config.cache_clear()
+            render_engine.cache_clear()
+            with caplog.at_level("WARNING", logger="django_systemd.config"):
+                units = project_units()
+        names = [unit.filename for unit in units]
+        # nested sub/web.service collapses with the top-level web.service
+        assert names.count("web.service") == 1
+        assert len(names) == len(set(names))
+        by_name = {unit.filename: unit for unit in units}
+        assert by_name["my.app.timer"].name == "my.app"
+        assert "bad name.service" not in by_name
+        assert any("bad name.service" in rec.message for rec in caplog.records)
 
 
 @pytest.mark.django_db
