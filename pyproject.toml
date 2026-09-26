@@ -97,7 +97,7 @@ warn_unused_configs = true
 warn_unreachable = true
 warn_no_return = true
 mypy_path = "src"
-modules = "django_systemd"
+packages = ["django_systemd"]
 
 # todo doc8 configuration here is not being picked up and doesnt seem to be working
 # as expected - for now pass these parameters manually

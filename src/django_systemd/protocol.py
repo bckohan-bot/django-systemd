@@ -4,6 +4,11 @@ A thin, mockable seam over ``systemctl --user`` and the user unit directory.
 django-systemd assumes every unit it manages runs as the deploying user, never as
 root. There is no system scope and no privilege escalation. Anything that needs
 root belongs in your provisioning tooling, not here.
+
+Talking to the user manager from a non-login session (for example over SSH as a
+deploy user) requires lingering to be enabled for that user with
+``loginctl enable-linger``, or ``XDG_RUNTIME_DIR`` to be set. Failures show up as
+``Failed to connect to bus`` in the raised CalledProcessError.
 """
 
 from __future__ import annotations
@@ -50,7 +55,11 @@ class SystemdCtl(Protocol):
 
     @property
     def available(self) -> bool:
-        """True if systemctl can be invoked on this machine."""
+        """
+        True if a systemctl binary is on PATH. This does not check that the user
+        manager is reachable; callers must check it before calling any other
+        method, which raise FileNotFoundError when systemctl is absent.
+        """
         ...
 
     def daemon_reload(self) -> None: ...
@@ -98,6 +107,13 @@ class SubprocessSystemdCtl:
     :param unit_dir: Where to install unit files. Defaults to :func:`user_unit_dir`.
     """
 
+    # systemctl is-enabled prints one of many states; these all mean "will start".
+    _ENABLED_STATES = frozenset(
+        {"enabled", "enabled-runtime", "static", "indirect", "alias"}
+    )
+    # is-active states that mean the unit is up or coming up.
+    _ACTIVE_STATES = frozenset({"active", "activating", "reloading"})
+
     def __init__(self, unit_dir: Path | None = None) -> None:
         self.unit_dir = unit_dir or user_unit_dir()
 
@@ -141,30 +157,35 @@ class SubprocessSystemdCtl:
         self._systemctl("disable", unit)
 
     def is_active(self, unit: str) -> bool:
-        return (
-            self._systemctl("is-active", unit, check=False).stdout.strip() == "active"
-        )
+        state = self._systemctl("is-active", unit, check=False).stdout.strip()
+        return state in self._ACTIVE_STATES
 
     def is_enabled(self, unit: str) -> bool:
-        return (
-            self._systemctl("is-enabled", unit, check=False).stdout.strip() == "enabled"
-        )
+        state = self._systemctl("is-enabled", unit, check=False).stdout.strip()
+        return state in self._ENABLED_STATES
+
+    def _unit_path(self, name: str) -> Path:
+        if not name or Path(name).name != name:
+            raise ValueError(f"Not a bare unit file name: {name!r}")
+        return self.unit_dir / name
 
     def is_installed(self, name: str) -> bool:
-        return (self.unit_dir / name).is_file()
+        return self._unit_path(name).is_file()
 
     def install_unit(
         self, source: Path, *, name: str | None = None, mode: int = 0o644
     ) -> Path:
+        destination = self._unit_path(name if name is not None else source.name)
         self.unit_dir.mkdir(parents=True, exist_ok=True)
-        destination = self.unit_dir / (name or source.name)
-        shutil.copyfile(source, destination)
-        destination.chmod(mode)
+        staged = destination.with_name(destination.name + ".tmp")
+        shutil.copyfile(source, staged)
+        staged.chmod(mode)
+        os.replace(staged, destination)
         return destination
 
     def uninstall_unit(self, name: str) -> bool:
-        destination = self.unit_dir / name
-        if destination.is_file():
+        destination = self._unit_path(name)
+        if destination.is_file() or destination.is_symlink():
             destination.unlink()
             return True
         return False

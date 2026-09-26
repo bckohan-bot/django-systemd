@@ -90,7 +90,13 @@ class TestSubprocessSystemdCtl:
         assert run.call_args[0][0] == ["systemctl", "--user", verb, "web.service"]
 
     @pytest.mark.parametrize(
-        "stdout,expected", [("active\n", True), ("inactive\n", False)]
+        "stdout,expected",
+        [
+            ("active\n", True),
+            ("activating\n", True),
+            ("inactive\n", False),
+            ("failed\n", False),
+        ],
     )
     @mock.patch("django_systemd.protocol.subprocess.run")
     def test_is_active(self, run, stdout, expected, tmp_path):
@@ -104,7 +110,14 @@ class TestSubprocessSystemdCtl:
         ]
 
     @pytest.mark.parametrize(
-        "stdout,expected", [("enabled\n", True), ("disabled\n", False)]
+        "stdout,expected",
+        [
+            ("enabled\n", True),
+            ("static\n", True),
+            ("indirect\n", True),
+            ("disabled\n", False),
+            ("masked\n", False),
+        ],
     )
     @mock.patch("django_systemd.protocol.subprocess.run")
     def test_is_enabled(self, run, stdout, expected, tmp_path):
@@ -155,3 +168,50 @@ class TestSubprocessSystemdCtl:
         assert ctl.uninstall_unit("web.service") is True
         assert ctl.is_installed("web.service") is False
         assert ctl.uninstall_unit("web.service") is False
+
+    @pytest.mark.parametrize("name", ["", "../escaped.service", "sub/web.service"])
+    def test_names_are_confined_to_unit_dir(self, name, tmp_path):
+        ctl = self._ctl(tmp_path)
+        source = tmp_path / "web.service"
+        source.write_text("x")
+        with pytest.raises(ValueError):
+            ctl.install_unit(source, name=name)
+        with pytest.raises(ValueError):
+            ctl.uninstall_unit(name)
+        with pytest.raises(ValueError):
+            ctl.is_installed(name)
+
+    def test_install_replaces_symlink_instead_of_writing_through(self, tmp_path):
+        ctl = self._ctl(tmp_path)
+        ctl.unit_dir.mkdir(parents=True)
+        target = tmp_path / "elsewhere.service"
+        target.write_text("original")
+        (ctl.unit_dir / "web.service").symlink_to(target)
+        source = tmp_path / "web.service"
+        source.write_text("new")
+        dest = ctl.install_unit(source)
+        assert not dest.is_symlink()
+        assert dest.read_text() == "new"
+        assert target.read_text() == "original"
+        assert not (ctl.unit_dir / "web.service.tmp").exists()
+
+    def test_install_from_destination_itself(self, tmp_path):
+        ctl = self._ctl(tmp_path)
+        source = tmp_path / "web.service"
+        source.write_text("same")
+        dest = ctl.install_unit(source)
+        assert ctl.install_unit(dest) == dest
+        assert dest.read_text() == "same"
+
+    def test_uninstall_removes_dangling_symlink(self, tmp_path):
+        ctl = self._ctl(tmp_path)
+        ctl.unit_dir.mkdir(parents=True)
+        (ctl.unit_dir / "web.service").symlink_to(tmp_path / "missing.service")
+        assert ctl.is_installed("web.service") is False
+        assert ctl.uninstall_unit("web.service") is True
+        assert not (ctl.unit_dir / "web.service").is_symlink()
+
+    @mock.patch("django_systemd.protocol.subprocess.run", side_effect=FileNotFoundError)
+    def test_missing_systemctl_raises_file_not_found(self, run, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            self._ctl(tmp_path).daemon_reload()
