@@ -65,6 +65,7 @@ class SystemdCtl(Protocol):
     def daemon_reload(self) -> None: ...
     def restart(self, unit: str) -> None: ...
     def reload(self, unit: str) -> None: ...
+    def stop(self, unit: str) -> None: ...
     def can_reload(self, unit: str) -> bool:
         """True if the unit defines a reload action (``ExecReload=``)."""
         ...
@@ -143,6 +144,9 @@ class SubprocessSystemdCtl:
 
     def reload(self, unit: str) -> None:
         self._systemctl("reload", unit)
+
+    def stop(self, unit: str) -> None:
+        self._systemctl("stop", unit)
 
     def can_reload(self, unit: str) -> bool:
         result = self._systemctl(

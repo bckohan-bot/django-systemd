@@ -5,6 +5,8 @@ FakeCtl, so nothing here needs systemd installed.
 
 from __future__ import annotations
 
+import re
+import subprocess
 from pathlib import Path
 from unittest import mock
 
@@ -14,7 +16,7 @@ from django.core.management import CommandError, call_command
 from django.test import override_settings
 
 from django_systemd.config import ServiceUnit, render_engine, template_engine_config
-from django_systemd.management.commands.systemd import parse_context
+from django_systemd.management.commands.systemd import Command, parse_context
 from django_systemd.protocol import SystemdCtl
 from django_systemd.signals import unit_installed
 
@@ -35,25 +37,43 @@ class FakeCtl:
         self.calls: list[tuple[str, str]] = []
         self.active: set[str] = set()
         self.enabled: set[str] = set()
+        # verb -> stderr text; when set, that verb raises CalledProcessError instead
+        # of recording a call.
+        self.fail: dict[str, str] = {}
+
+    def _maybe_fail(self, verb: str, *args: str) -> None:
+        if verb in self.fail:
+            raise subprocess.CalledProcessError(
+                1, ["systemctl", "--user", verb, *args], "", self.fail[verb]
+            )
 
     def daemon_reload(self) -> None:
+        self._maybe_fail("daemon-reload")
         self.calls.append(("daemon-reload", ""))
 
     def restart(self, unit: str) -> None:
+        self._maybe_fail("restart", unit)
         self.calls.append(("restart", unit))
         self.active.add(unit)
 
     def reload(self, unit: str) -> None:
+        self._maybe_fail("reload", unit)
         self.calls.append(("reload", unit))
+
+    def stop(self, unit: str) -> None:
+        self._maybe_fail("stop", unit)
+        self.calls.append(("stop", unit))
 
     def can_reload(self, unit: str) -> bool:
         return unit in self.reloadable
 
     def enable(self, unit: str) -> None:
+        self._maybe_fail("enable", unit)
         self.calls.append(("enable", unit))
         self.enabled.add(unit)
 
     def disable(self, unit: str) -> None:
+        self._maybe_fail("disable", unit)
         self.calls.append(("disable", unit))
         self.enabled.discard(unit)
 
@@ -71,6 +91,8 @@ class FakeCtl:
     def install_unit(
         self, source: Path, *, name: str | None = None, mode: int = 0o644
     ) -> Path:
+        # Not recorded in self.calls: install ordering (e.g. daemon-reload coming
+        # after every unit is copied) is asserted via daemon-reload's position.
         self.unit_dir.mkdir(parents=True, exist_ok=True)
         destination = self.unit_dir / (name or source.name)
         destination.write_bytes(source.read_bytes())
@@ -79,6 +101,7 @@ class FakeCtl:
     def uninstall_unit(self, name: str) -> bool:
         destination = self.unit_dir / name
         if destination.is_file():
+            self.calls.append(("uninstall", name))
             destination.unlink()
             return True
         return False
@@ -340,7 +363,7 @@ class TestInstall:
             unit_installed.disconnect(receiver)
         assert len(received) == 3
         for event in received:
-            assert type(event["sender"]).__name__ == "Command"
+            assert isinstance(event["sender"], Command)
             assert isinstance(event["unit"], ServiceUnit)
             assert event["destination"] == fake_ctl.unit_dir / event["unit"].filename
 
@@ -348,11 +371,55 @@ class TestInstall:
         with pytest.raises(CommandError, match="No systemd unit templates"):
             call_command("systemd", "install")
 
-    def test_without_systemctl_still_copies(self, make_ctl):
+    def test_without_systemctl_still_copies(self, make_ctl, capsys):
         ctl = make_ctl(available=False)
         call_command("systemd", "install", "--enable")
         assert (ctl.unit_dir / "web.service").is_file()
         assert ctl.calls == []
+        assert "systemctl not found" in capsys.readouterr().err
+
+    def test_source_with_context_is_an_error(self, fake_ctl, tmp_path):
+        source = tmp_path / "prerendered"
+        source.mkdir()
+        with pytest.raises(CommandError, match="--context"):
+            call_command(
+                "systemd",
+                "install",
+                "--source",
+                str(source),
+                "-c",
+                "venv=/x",
+            )
+
+    def test_daemon_reload_failure_is_a_command_error(self, fake_ctl):
+        fake_ctl.fail = {"daemon-reload": "Failed to connect to bus: No medium found"}
+        with pytest.raises(CommandError, match="Failed to connect to bus"):
+            call_command("systemd", "install")
+        installed = {f.name for f in fake_ctl.unit_dir.iterdir()}
+        assert installed == {"web.service", "check.timer", "app@.target"}
+
+    def test_enable_failure_is_a_command_error(self, fake_ctl):
+        fake_ctl.fail = {"enable": "Unit has no installation config"}
+        with pytest.raises(CommandError, match="no installation config"):
+            call_command("systemd", "install", "--enable")
+
+    def test_install_failure_names_the_unit(self, fake_ctl):
+        original = fake_ctl.install_unit
+        state = {"calls": 0}
+
+        def flaky(source, **kwargs):
+            state["calls"] += 1
+            if state["calls"] == 2:
+                raise OSError("disk full")
+            return original(source, **kwargs)
+
+        fake_ctl.install_unit = flaky  # type: ignore[method-assign]
+        with pytest.raises(CommandError) as exc_info:
+            call_command("systemd", "install")
+        message = str(exc_info.value)
+        assert re.search(r"check\.timer|web\.service|app@\.target", message)
+        assert "disk full" in message
+        assert ("daemon-reload", "") not in fake_ctl.calls
 
 
 @pytest.mark.django_db
@@ -364,33 +431,41 @@ class TestUninstall:
         assert not any(fake_ctl.unit_dir.iterdir())
         disabled = {unit for verb, unit in fake_ctl.calls if verb == "disable"}
         assert disabled == {"web.service", "check.timer"}
+        assert fake_ctl.calls.index(("stop", "web.service")) < fake_ctl.calls.index(
+            ("disable", "web.service")
+        )
+        assert fake_ctl.calls.index(("disable", "web.service")) < fake_ctl.calls.index(
+            ("uninstall", "web.service")
+        )
+        target_calls = [call for call in fake_ctl.calls if call[1] == "app@.target"]
+        assert target_calls == [("uninstall", "app@.target")]
         assert fake_ctl.calls[-1] == ("daemon-reload", "")
         out = capsys.readouterr().out
-        assert "removed web.service" in out
+        assert "web.service" in out
 
     def test_nothing_installed_is_a_noop(self, fake_ctl, capsys):
         call_command("systemd", "uninstall")
         assert "removed" not in capsys.readouterr().out
         assert fake_ctl.calls[-1] == ("daemon-reload", "")
+        assert not any(verb in ("stop", "disable") for verb, _ in fake_ctl.calls)
 
-    def test_disable_failure_is_ignored(self, fake_ctl):
-        import subprocess
-
+    def test_stop_or_disable_failure_is_reported_not_fatal(self, fake_ctl, capsys):
+        fake_ctl.fail = {"disable": "Unit not enabled"}
         call_command("systemd", "install")
-
-        def failing_disable(unit):
-            raise subprocess.CalledProcessError(1, ["systemctl"], "", "not enabled")
-
-        fake_ctl.disable = failing_disable  # type: ignore[method-assign]
         call_command("systemd", "uninstall")
         assert not any(fake_ctl.unit_dir.iterdir())
+        assert ("daemon-reload", "") in fake_ctl.calls
+        assert "Unit not enabled" in capsys.readouterr().err
 
-    def test_without_systemctl_still_removes(self, make_ctl):
+    def test_without_systemctl_still_removes(self, make_ctl, capsys):
         ctl = make_ctl(available=False)
         call_command("systemd", "install")
         call_command("systemd", "uninstall")
         assert not any(ctl.unit_dir.iterdir())
-        assert ctl.calls == []
+        # "uninstall" is FakeCtl's own bookkeeping for file removal, not a
+        # systemctl verb (mirrors uninstall_unit, which never shells out).
+        assert all(verb == "uninstall" for verb, _ in ctl.calls)
+        assert "systemctl not found" in capsys.readouterr().err
 
 
 class TestParseContext:

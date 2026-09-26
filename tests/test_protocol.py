@@ -79,6 +79,7 @@ class TestSubprocessSystemdCtl:
         [
             ("restart", "restart"),
             ("reload", "reload"),
+            ("stop", "stop"),
             ("enable", "enable"),
             ("disable", "disable"),
         ],

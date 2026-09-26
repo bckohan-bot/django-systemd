@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+from collections.abc import Callable
 from functools import cached_property
 from pathlib import Path
 from typing import Annotated
@@ -62,6 +63,14 @@ class Command(TyperCommand):
     def units(self) -> list[ServiceUnit]:
         return project_units()
 
+    def run_ctl(self, verb: Callable[..., None], *args: str) -> None:
+        """Run a systemctl-backed verb, surfacing stderr on failure."""
+        try:
+            verb(*args)
+        except subprocess.CalledProcessError as err:
+            detail = (err.stderr or "").strip() or f"exit status {err.returncode}"
+            raise CommandError(f"{' '.join(err.cmd)} failed: {detail}") from err
+
     def render_units(
         self, dest: Path, context: dict[str, str] | None = None
     ) -> list[tuple[ServiceUnit, Path]]:
@@ -79,12 +88,13 @@ class Command(TyperCommand):
                     unit.template, dest=target, context=context or None
                 ):
                     rendered.append((unit, Path(render.destination)))
-            except Exception as err:
+            except (TemplateDoesNotExist, TemplateSyntaxError) as err:
                 target.unlink(missing_ok=True)
-                if isinstance(err, (TemplateDoesNotExist, TemplateSyntaxError)):
-                    raise CommandError(
-                        f"Failed to render {unit.template}: {err}"
-                    ) from err
+                raise CommandError(f"Failed to render {unit.template}: {err}") from err
+            except BaseException:
+                # Anything else (e.g. NoReverseMatch from {% url %}) is a bug in the
+                # template or the project and should surface with its traceback.
+                target.unlink(missing_ok=True)
                 raise
         return rendered
 
@@ -157,6 +167,8 @@ class Command(TyperCommand):
         """
         if not self.units:
             raise CommandError("No systemd unit templates found.")
+        if source is not None and context:
+            raise CommandError("--context has no effect with --source.")
 
         with tempfile.TemporaryDirectory() as tmp:
             if source is None:
@@ -171,28 +183,50 @@ class Command(TyperCommand):
                         f"Missing unit files in {source}: {', '.join(missing)}"
                     )
             for unit, path in files:
-                destination = self.ctl.install_unit(path)
+                try:
+                    destination = self.ctl.install_unit(path)
+                except OSError as err:
+                    raise CommandError(
+                        f"Failed to install {unit.filename} to {self.ctl.unit_dir}: {err}. "
+                        "Re-run install once the cause is fixed."
+                    ) from err
                 unit_installed.send(sender=self, unit=unit, destination=destination)
                 typer.echo(str(destination))
 
         if not self.ctl.available:
+            typer.secho(
+                "systemctl not found; skipped daemon-reload and enable.", err=True
+            )
             return
-        self.ctl.daemon_reload()
+        self.run_ctl(self.ctl.daemon_reload)
         if enable:
             for unit in self.units:
                 if not unit.instanceable:
-                    self.ctl.enable(unit.filename)
+                    self.run_ctl(self.ctl.enable, unit.filename)
 
     @command()
     def uninstall(self) -> None:
-        """Disable and remove this project's units from the user unit directory."""
+        """Stop, disable and remove this project's units from the user unit directory."""
         for unit in self.units:
-            if self.ctl.available and not unit.instanceable:
-                try:
-                    self.ctl.disable(unit.filename)
-                except subprocess.CalledProcessError:
-                    pass
+            if (
+                self.ctl.available
+                and not unit.instanceable
+                and self.ctl.is_installed(unit.filename)
+            ):
+                for verb in (self.ctl.stop, self.ctl.disable):
+                    try:
+                        verb(unit.filename)
+                    except subprocess.CalledProcessError as err:
+                        typer.secho(
+                            f"{' '.join(err.cmd)} failed: {(err.stderr or '').strip()}",
+                            err=True,
+                        )
             if self.ctl.uninstall_unit(unit.filename):
                 typer.echo(f"removed {unit.filename}")
         if self.ctl.available:
-            self.ctl.daemon_reload()
+            self.run_ctl(self.ctl.daemon_reload)
+        else:
+            typer.secho(
+                "systemctl not found; skipped stop, disable and daemon-reload.",
+                err=True,
+            )
