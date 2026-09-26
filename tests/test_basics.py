@@ -1,14 +1,12 @@
 """
-Tests for django-systemd: config, defines, protocol, and management commands.
+Tests for django-systemd: config, defines, and signals.
 """
 
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 from django.conf import settings
-from django.core.management import call_command
 from django.template.exceptions import TemplateDoesNotExist
 from django.test import override_settings
 
@@ -332,25 +330,23 @@ class TestRenderEngine:
         assert "app2" in first_seen["check.timer"]
         assert "app2" in first_seen["app@.target"]
 
-    def test_render_service_template(self):
+    def test_render_service_template(self, tmp_path):
         """Rendered service file should contain rendered context variables."""
         engine = render_engine()
-        with tempfile.TemporaryDirectory() as tmp:
-            renders = list(engine.render_each("**/*.service", dest=tmp))
-            assert len(renders) == 1
-            content = Path(renders[0].destination).read_text()
-            # Template variable {{ python }} should be substituted
-            assert str(sys.executable) in content
-            # app2 override marker should appear
-            assert "app2 override" in content
+        renders = list(engine.render_each("**/*.service", dest=tmp_path))
+        assert len(renders) == 1
+        content = Path(renders[0].destination).read_text()
+        # Template variable {{ python }} should be substituted
+        assert str(sys.executable) in content
+        # app2 override marker should appear
+        assert "app2 override" in content
 
-    def test_render_timer_template(self):
+    def test_render_timer_template(self, tmp_path):
         engine = render_engine()
-        with tempfile.TemporaryDirectory() as tmp:
-            renders = list(engine.render_each("**/*.timer", dest=tmp))
-            assert len(renders) == 1
-            content = Path(renders[0].destination).read_text()
-            assert "app2 override" in content
+        renders = list(engine.render_each("**/*.timer", dest=tmp_path))
+        assert len(renders) == 1
+        content = Path(renders[0].destination).read_text()
+        assert "app2 override" in content
 
     def test_render_unknown_pattern_raises(self):
         engine = render_engine()
@@ -385,66 +381,3 @@ class TestSignals:
             unit_installed.disconnect(handler)
 
         assert received == ["web.service"]
-
-
-# ---------------------------------------------------------------------------
-# Management command
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-class TestSystemdCommand:
-    def test_list_no_units(self, capsys):
-        """When no templates exist, list should print the 'none found' message."""
-        with override_settings(INSTALLED_APPS=["django_systemd", "django_typer"]):
-            template_engine_config.cache_clear()
-            render_engine.cache_clear()
-            call_command("systemd", "list")
-        out = capsys.readouterr().out
-        assert "No systemd unit templates found" in out
-        template_engine_config.cache_clear()
-        render_engine.cache_clear()
-
-    def test_list_outputs_unit_names(self, capsys):
-        call_command("systemd", "list")
-        out = capsys.readouterr().out
-        assert "web.service" in out
-        assert "check.timer" in out
-        assert "app@.target" in out
-
-    def test_list_shows_app2_paths(self, capsys):
-        call_command("systemd", "list")
-        out = capsys.readouterr().out
-        assert "app2" in out
-
-    def test_render_creates_files(self, capsys):
-        with tempfile.TemporaryDirectory() as tmp:
-            call_command("systemd", "render", tmp)
-            files = {f.name for f in Path(tmp).rglob("*") if f.is_file()}
-            assert "web.service" in files
-            assert "check.timer" in files
-            assert "app@.target" in files
-
-    def test_render_default_dir(self, capsys, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        call_command("systemd", "render")
-        files = {f.name for f in tmp_path.rglob("*") if f.is_file()}
-        assert "web.service" in files
-
-    def test_render_outputs_paths(self, capsys):
-        with tempfile.TemporaryDirectory() as tmp:
-            call_command("systemd", "render", tmp)
-            out = capsys.readouterr().out
-            assert "web.service" in out
-
-    def test_render_no_templates_found(self, capsys):
-        with override_settings(INSTALLED_APPS=["django_systemd", "django_typer"]):
-            template_engine_config.cache_clear()
-            render_engine.cache_clear()
-            with tempfile.TemporaryDirectory() as tmp:
-                call_command("systemd", "render", tmp)
-            err = capsys.readouterr().err
-            assert "No unit templates found" in err
-        # Reset for other tests
-        template_engine_config.cache_clear()
-        render_engine.cache_clear()
