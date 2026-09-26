@@ -42,6 +42,12 @@ ContextOption = Annotated[
 ]
 
 
+def describe_failure(err: subprocess.CalledProcessError) -> str:
+    """One line naming the systemctl invocation and why it failed."""
+    detail = (err.stderr or "").strip() or f"exit status {err.returncode}"
+    return f"{' '.join(err.cmd)} failed: {detail}"
+
+
 def parse_context(pairs: list[str]) -> dict[str, str]:
     """Turn ``["venv=/srv/app"]`` into ``{"venv": "/srv/app"}``."""
     context: dict[str, str] = {}
@@ -68,8 +74,7 @@ class Command(TyperCommand):
         try:
             verb(*args)
         except subprocess.CalledProcessError as err:
-            detail = (err.stderr or "").strip() or f"exit status {err.returncode}"
-            raise CommandError(f"{' '.join(err.cmd)} failed: {detail}") from err
+            raise CommandError(describe_failure(err)) from err
 
     def render_units(
         self, dest: Path, context: dict[str, str] | None = None
@@ -217,10 +222,7 @@ class Command(TyperCommand):
                     try:
                         verb(unit.filename)
                     except subprocess.CalledProcessError as err:
-                        typer.secho(
-                            f"{' '.join(err.cmd)} failed: {(err.stderr or '').strip()}",
-                            err=True,
-                        )
+                        typer.secho(describe_failure(err), err=True)
             if self.ctl.uninstall_unit(unit.filename):
                 typer.echo(f"removed {unit.filename}")
         if self.ctl.available:
@@ -230,3 +232,63 @@ class Command(TyperCommand):
                 "systemctl not found; skipped stop, disable and daemon-reload.",
                 err=True,
             )
+
+    def require_systemctl(self) -> None:
+        if not self.ctl.available:
+            raise CommandError("systemctl is not available on this system.")
+
+    def targets(self, names: list[str]) -> list[ServiceUnit]:
+        """
+        Resolve unit names to project units in restart order.
+
+        Template units (``name@.type``) are never targets because systemctl needs
+        an instance name to act on them. With no names, every installed
+        non-template unit is selected.
+        """
+        by_name = {u.filename: u for u in self.units if not u.instanceable}
+        if names:
+            unknown = [name for name in names if name not in by_name]
+            if unknown:
+                raise CommandError(f"Unknown project unit(s): {', '.join(unknown)}")
+            selected = [by_name[name] for name in names]
+        else:
+            selected = [
+                u for u in by_name.values() if self.ctl.is_installed(u.filename)
+            ]
+        return sorted(selected, key=lambda u: u.restart_priority)
+
+    @command()
+    def restart(
+        self,
+        units: Annotated[
+            list[str] | None,
+            typer.Argument(
+                help="Unit file names to restart. Defaults to every installed project unit."
+            ),
+        ] = None,
+    ) -> None:
+        """Restart this project's units: sockets first, then services, paths and timers."""
+        self.require_systemctl()
+        for unit in self.targets(units or []):
+            self.run_ctl(self.ctl.restart, unit.filename)
+            typer.echo(f"restarted {unit.filename}")
+
+    @command()
+    def reload(
+        self,
+        units: Annotated[
+            list[str] | None,
+            typer.Argument(
+                help="Unit file names to reload. Defaults to every installed project unit."
+            ),
+        ] = None,
+    ) -> None:
+        """Reload units that support it (ExecReload=) and restart the rest."""
+        self.require_systemctl()
+        for unit in self.targets(units or []):
+            if self.ctl.can_reload(unit.filename):
+                self.run_ctl(self.ctl.reload, unit.filename)
+                typer.echo(f"reloaded {unit.filename}")
+            else:
+                self.run_ctl(self.ctl.restart, unit.filename)
+                typer.echo(f"restarted {unit.filename}")

@@ -5,7 +5,6 @@ FakeCtl, so nothing here needs systemd installed.
 
 from __future__ import annotations
 
-import re
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -405,11 +404,12 @@ class TestInstall:
 
     def test_install_failure_names_the_unit(self, fake_ctl):
         original = fake_ctl.install_unit
-        state = {"calls": 0}
+        state = {"calls": 0, "failing_name": None}
 
         def flaky(source, **kwargs):
             state["calls"] += 1
             if state["calls"] == 2:
+                state["failing_name"] = source.name
                 raise OSError("disk full")
             return original(source, **kwargs)
 
@@ -417,9 +417,17 @@ class TestInstall:
         with pytest.raises(CommandError) as exc_info:
             call_command("systemd", "install")
         message = str(exc_info.value)
-        assert re.search(r"check\.timer|web\.service|app@\.target", message)
+        # The second install_unit call is the one that fails; assert the exact
+        # name that raised appears in the error, not just any project unit name.
+        assert state["failing_name"] is not None
+        assert state["failing_name"] in message
         assert "disk full" in message
         assert ("daemon-reload", "") not in fake_ctl.calls
+
+    def test_empty_stderr_reports_exit_status(self, fake_ctl):
+        fake_ctl.fail = {"daemon-reload": ""}
+        with pytest.raises(CommandError, match="exit status 1"):
+            call_command("systemd", "install")
 
 
 @pytest.mark.django_db
@@ -480,3 +488,90 @@ class TestParseContext:
 
     def test_key_is_stripped(self):
         assert parse_context([" venv =x"]) == {"venv": "x"}
+
+
+@pytest.mark.django_db
+class TestRestart:
+    def test_restarts_installed_units_in_order(self, fake_ctl, capsys):
+        call_command("systemd", "install")
+        fake_ctl.calls.clear()
+        call_command("systemd", "restart")
+        assert fake_ctl.calls == [
+            ("restart", "web.service"),
+            ("restart", "check.timer"),
+        ]
+        out = capsys.readouterr().out
+        assert "restarted web.service" in out
+
+    def test_only_installed_units_by_default(self, fake_ctl):
+        call_command("systemd", "install")
+        fake_ctl.uninstall_unit("check.timer")
+        fake_ctl.calls.clear()
+        call_command("systemd", "restart")
+        assert fake_ctl.calls == [("restart", "web.service")]
+
+    def test_explicit_subset(self, fake_ctl):
+        call_command("systemd", "restart", "check.timer")
+        assert fake_ctl.calls == [("restart", "check.timer")]
+
+    def test_explicit_units_are_ordered(self, fake_ctl):
+        call_command("systemd", "restart", "check.timer", "web.service")
+        assert fake_ctl.calls == [
+            ("restart", "web.service"),
+            ("restart", "check.timer"),
+        ]
+
+    def test_unknown_unit(self, fake_ctl):
+        with pytest.raises(CommandError, match="nope.service"):
+            call_command("systemd", "restart", "nope.service")
+        assert fake_ctl.calls == []
+
+    def test_template_unit_is_not_a_target(self, fake_ctl):
+        with pytest.raises(CommandError, match="app@.target"):
+            call_command("systemd", "restart", "app@.target")
+
+    def test_nothing_installed_is_a_noop(self, fake_ctl, capsys):
+        call_command("systemd", "restart")
+        assert fake_ctl.calls == []
+        assert "restarted" not in capsys.readouterr().out
+
+    def test_failure_is_a_command_error(self, fake_ctl):
+        fake_ctl.fail = {"restart": "Job for web.service failed"}
+        with pytest.raises(CommandError, match="Job for web.service failed"):
+            call_command("systemd", "restart", "web.service")
+
+    def test_requires_systemctl(self, make_ctl):
+        make_ctl(available=False)
+        with pytest.raises(CommandError, match="systemctl"):
+            call_command("systemd", "restart")
+
+
+@pytest.mark.django_db
+class TestReload:
+    def test_reloads_when_supported_else_restarts(self, fake_ctl, capsys):
+        fake_ctl.reloadable.add("web.service")
+        call_command("systemd", "install")
+        fake_ctl.calls.clear()
+        call_command("systemd", "reload")
+        assert fake_ctl.calls == [
+            ("reload", "web.service"),
+            ("restart", "check.timer"),
+        ]
+        out = capsys.readouterr().out
+        assert "reloaded web.service" in out
+        assert "restarted check.timer" in out
+
+    def test_unknown_unit(self, fake_ctl):
+        with pytest.raises(CommandError, match="nope.service"):
+            call_command("systemd", "reload", "nope.service")
+
+    def test_failure_is_a_command_error(self, fake_ctl):
+        fake_ctl.reloadable.add("web.service")
+        fake_ctl.fail = {"reload": "Failed to reload web.service"}
+        with pytest.raises(CommandError, match="Failed to reload web.service"):
+            call_command("systemd", "reload", "web.service")
+
+    def test_requires_systemctl(self, make_ctl):
+        make_ctl(available=False)
+        with pytest.raises(CommandError, match="systemctl"):
+            call_command("systemd", "reload")
