@@ -38,12 +38,15 @@ class ServiceUnit:
     :param unit_type: The :class:`~django_systemd.defines.SystemdUnitType`.
     :param path: The template (or rendered file) this unit came from, if known.
     :param instanceable: True if this is a template unit (its name ends in ``@``).
+    :param template: The template name this unit was discovered under, as the
+        render engine knows it (e.g. ``sub/web.service``).
     """
 
     name: str
     unit_type: SystemdUnitType
     path: Path | None = None
     instanceable: bool = False
+    template: str = ""
 
     @property
     def filename(self) -> str:
@@ -141,26 +144,34 @@ def project_units() -> list[ServiceUnit]:
     """
     The manifest: every systemd unit template bundled by an installed app.
 
-    The render engine resolves each template name to its highest-precedence app
-    and may yield that winner once per app that provides the name, so repeats are
-    collapsed here by unit file name. Files that match the discovery globs but are
-    not valid ``<name>.<unit type>`` names are skipped with a warning.
+    Templates are those matching the ``SYSTEMD_TEMPLATES`` patterns. The render
+    engine resolves each template name to its highest-precedence app and may
+    yield that winner once per app that provides the name, so repeats are
+    collapsed here by unit file name. Files that match a pattern but are not
+    valid ``<name>.<unit type>`` names are skipped with a warning.
 
-    :return: Units in discovery order, each with ``path`` set to its template.
+    :return: Units in discovery order, each with ``path`` set to its template
+        file and ``template`` set to the name the render engine knows it by.
     """
+    from django.template.exceptions import TemplateDoesNotExist
+
+    engine = render_engine()
     seen: set[str] = set()
     units: list[ServiceUnit] = []
-    for template in render_engine().search(""):
-        origin = Path(template.origin.name)
-        if origin.is_dir():
-            continue
+    for pattern in template_engine_config()["templates"]:
         try:
-            unit = ServiceUnit.parse(origin)
-        except ValueError as err:
-            logger.warning("Ignoring %s: %s", origin, err)
+            for render in engine.find(pattern):
+                origin = Path(render.template.origin.name)
+                try:
+                    unit = ServiceUnit.parse(origin)
+                except ValueError as err:
+                    logger.warning("Ignoring %s: %s", origin, err)
+                    continue
+                if unit.filename in seen:
+                    continue
+                unit.template = render.template.origin.template_name
+                seen.add(unit.filename)
+                units.append(unit)
+        except TemplateDoesNotExist:
             continue
-        if unit.filename in seen:
-            continue
-        seen.add(unit.filename)
-        units.append(unit)
     return units

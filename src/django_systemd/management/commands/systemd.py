@@ -25,12 +25,7 @@ from django.core.management import CommandError
 from django.template.exceptions import TemplateDoesNotExist
 from django_typer.management import TyperCommand, command
 
-from django_systemd.config import (
-    ServiceUnit,
-    project_units,
-    render_engine,
-    template_engine_config,
-)
+from django_systemd.config import ServiceUnit, project_units, render_engine
 from django_systemd.protocol import SubprocessSystemdCtl, SystemdCtl
 
 ContextOption = Annotated[
@@ -48,6 +43,7 @@ def parse_context(pairs: list[str]) -> dict[str, str]:
     context: dict[str, str] = {}
     for pair in pairs:
         key, sep, value = pair.partition("=")
+        key = key.strip()
         if not sep or not key:
             raise CommandError(f"Context overrides must be KEY=VALUE, got: {pair!r}")
         context[key] = value
@@ -65,18 +61,24 @@ class Command(TyperCommand):
 
     def render_units(
         self, dest: Path, context: dict[str, str] | None = None
-    ) -> list[Path]:
-        """Render every project unit into ``dest`` and return the written paths."""
+    ) -> list[tuple[ServiceUnit, Path]]:
+        """Render every project unit into ``dest`` as ``<dest>/<unit filename>``."""
+        if dest.exists() and not dest.is_dir():
+            raise CommandError(f"{dest} exists and is not a directory.")
+        if not self.units:
+            raise CommandError("No systemd unit templates found.")
         dest.mkdir(parents=True, exist_ok=True)
-        rendered: list[Path] = []
-        for pattern in template_engine_config()["templates"]:
+        rendered: list[tuple[ServiceUnit, Path]] = []
+        for unit in self.units:
+            target = dest / unit.filename
             try:
                 for render in render_engine().render_each(
-                    pattern, dest=dest, context=context or None
+                    unit.template, dest=target, context=context or None
                 ):
-                    rendered.append(Path(render.destination))
-            except TemplateDoesNotExist:
-                continue
+                    rendered.append((unit, Path(render.destination)))
+            except TemplateDoesNotExist as err:
+                target.unlink(missing_ok=True)
+                raise CommandError(f"Failed to render {unit.template}: {err}") from err
         return rendered
 
     @command(name="list")
@@ -85,17 +87,19 @@ class Command(TyperCommand):
         if not self.units:
             typer.echo("No systemd unit templates found.")
             return
+        width = max(len("UNIT"), *(len(u.filename) for u in self.units))
         typer.echo(
-            f"{'UNIT':<32} {'INSTALLED':<10} {'ENABLED':<8} {'ACTIVE':<8} SOURCE"
+            f"{'UNIT':<{width}} {'INSTALLED':<10} {'ENABLED':<8} {'ACTIVE':<8} SOURCE"
         )
+        available = self.ctl.available
         for unit in self.units:
             installed = self.ctl.is_installed(unit.filename)
             enabled = active = "-"
-            if installed and self.ctl.available and not unit.instanceable:
+            if installed and available and not unit.instanceable:
                 enabled = "yes" if self.ctl.is_enabled(unit.filename) else "no"
                 active = "yes" if self.ctl.is_active(unit.filename) else "no"
             typer.echo(
-                f"{unit.filename:<32} {'yes' if installed else 'no':<10} "
+                f"{unit.filename:<{width}} {'yes' if installed else 'no':<10} "
                 f"{enabled:<8} {active:<8} {unit.path}"
             )
 
@@ -114,7 +118,5 @@ class Command(TyperCommand):
         rendered = self.render_units(
             output_dir or Path("."), parse_context(context or [])
         )
-        for path in rendered:
+        for _, path in rendered:
             typer.echo(str(path))
-        if not rendered:
-            typer.echo("No unit templates found.", err=True)

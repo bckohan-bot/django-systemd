@@ -9,10 +9,12 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from django.conf import settings
 from django.core.management import CommandError, call_command
 from django.test import override_settings
 
 from django_systemd.config import render_engine, template_engine_config
+from django_systemd.management.commands.systemd import parse_context
 from django_systemd.protocol import SystemdCtl
 
 
@@ -92,6 +94,24 @@ def fake_ctl(tmp_path):
 
 
 @pytest.fixture
+def make_ctl(tmp_path):
+    def factory(**kwargs):
+        ctl = FakeCtl(tmp_path / "units", **kwargs)
+        patcher = mock.patch(
+            "django_systemd.management.commands.systemd.SubprocessSystemdCtl",
+            return_value=ctl,
+        )
+        patcher.start()
+        patchers.append(patcher)
+        return ctl
+
+    patchers: list = []
+    yield factory
+    for patcher in patchers:
+        patcher.stop()
+
+
+@pytest.fixture
 def no_units():
     """Run the body with no app providing systemd templates."""
     with override_settings(INSTALLED_APPS=["django_systemd", "django_typer"]):
@@ -145,15 +165,11 @@ class TestList:
         assert row.split()[1:4] == ["yes", "-", "-"]
         assert fake_ctl.calls == []
 
-    def test_unavailable_systemctl_shows_dashes(self, tmp_path, capsys):
-        ctl = FakeCtl(tmp_path / "units", available=False)
+    def test_unavailable_systemctl_shows_dashes(self, make_ctl, capsys):
+        ctl = make_ctl(available=False)
         ctl.unit_dir.mkdir(parents=True)
         (ctl.unit_dir / "web.service").write_text("x")
-        with mock.patch(
-            "django_systemd.management.commands.systemd.SubprocessSystemdCtl",
-            return_value=ctl,
-        ):
-            call_command("systemd", "list")
+        call_command("systemd", "list")
         row = next(
             line
             for line in capsys.readouterr().out.splitlines()
@@ -200,6 +216,61 @@ class TestRender:
         with pytest.raises(CommandError, match="KEY=VALUE"):
             call_command("systemd", "render", str(tmp_path), "-c", "=x")
 
-    def test_no_templates(self, fake_ctl, no_units, tmp_path, capsys):
-        call_command("systemd", "render", str(tmp_path))
-        assert "No unit templates found" in capsys.readouterr().err
+    def test_no_templates(self, fake_ctl, no_units, tmp_path):
+        with pytest.raises(CommandError, match="No systemd unit templates"):
+            call_command("systemd", "render", str(tmp_path))
+
+    def test_output_path_is_a_file(self, fake_ctl, tmp_path):
+        target = tmp_path / "not-a-dir"
+        target.write_text("x")
+        with pytest.raises(CommandError, match="not a directory"):
+            call_command("systemd", "render", str(target))
+
+    def test_broken_template_errors_without_partial_output(self, fake_ctl, tmp_path):
+        with override_settings(
+            INSTALLED_APPS=["tests.apps.app3", *settings.INSTALLED_APPS],
+            SYSTEMD_TEMPLATES=["**/*.service"],
+        ):
+            template_engine_config.cache_clear()
+            render_engine.cache_clear()
+            with pytest.raises(CommandError, match="broken.service"):
+                call_command("systemd", "render", str(tmp_path))
+        assert not (tmp_path / "broken.service").exists()
+
+    def test_systemd_templates_setting_scopes_render(self, fake_ctl, tmp_path):
+        with override_settings(
+            INSTALLED_APPS=["tests.apps.app3", *settings.INSTALLED_APPS],
+            SYSTEMD_TEMPLATES=["**/*.timer"],
+        ):
+            template_engine_config.cache_clear()
+            render_engine.cache_clear()
+            call_command("systemd", "render", str(tmp_path))
+        assert (tmp_path / "my.app.timer").is_file()
+        assert (tmp_path / "check.timer").is_file()
+        assert not any(p.is_dir() for p in tmp_path.iterdir())
+
+    def test_nested_template_renders_flat(self, fake_ctl, tmp_path):
+        with override_settings(
+            INSTALLED_APPS=["tests.apps.app3", "django_systemd", "django_typer"],
+            SYSTEMD_TEMPLATES=["**/web.service"],
+        ):
+            template_engine_config.cache_clear()
+            render_engine.cache_clear()
+            call_command("systemd", "render", str(tmp_path))
+        content = (tmp_path / "web.service").read_text()
+        assert "nested web (app3)" in content
+        assert not (tmp_path / "sub").exists()
+
+
+class TestParseContext:
+    def test_value_contains_equals(self):
+        assert parse_context(["KEY=a=b"]) == {"KEY": "a=b"}
+
+    def test_duplicate_key_last_wins(self):
+        assert parse_context(["KEY=a", "KEY=b"]) == {"KEY": "b"}
+
+    def test_empty_value(self):
+        assert parse_context(["KEY="]) == {"KEY": ""}
+
+    def test_key_is_stripped(self):
+        assert parse_context([" venv =x"]) == {"venv": "x"}

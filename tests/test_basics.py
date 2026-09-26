@@ -25,21 +25,6 @@ from django_systemd.defines import (
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def clear_lru_caches():
-    """Clear module-level lru_cache between tests for isolation."""
-    render_engine.cache_clear()
-    template_engine_config.cache_clear()
-    yield
-    render_engine.cache_clear()
-    template_engine_config.cache_clear()
-
-
-# ---------------------------------------------------------------------------
 # defines.py
 # ---------------------------------------------------------------------------
 
