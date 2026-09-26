@@ -24,8 +24,9 @@
 
 ```bash
 django-admin systemd list
-django-admin systemd render ./units --context venv=/srv/app/.venv
-django-admin systemd install --enable
-django-admin systemd reload
+django-admin systemd render ./units --context venv=/srv/app/.venv  # in CI
+django-admin systemd install --enable  # on the host
+django-admin systemd reload  # on the host
 ```
 
+See the [documentation](https://django-systemd.readthedocs.io) for the how-to and settings.
