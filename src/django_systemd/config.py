@@ -15,23 +15,52 @@ unit_types = "|".join(re.escape(typ.value) for typ in SystemdUnitType)
 
 SERVICE_UNIT_REGEX = re.compile(rf"^(?P<name>[\w@-]+)\.(?P<type>{unit_types})$")
 
+# The order units should be restarted in. Sockets must be up before the services
+# they activate, paths and timers trigger services so they go after. Anything not
+# listed is restarted last.
+_RESTART_ORDER: dict[SystemdUnitType, int] = {
+    SystemdUnitType.SOCKET: 0,
+    SystemdUnitType.SERVICE: 1,
+    SystemdUnitType.PATH: 2,
+    SystemdUnitType.TIMER: 3,
+}
+
 
 @dataclass
 class ServiceUnit:
+    """
+    A systemd unit that belongs to this project.
+
+    :param name: The unit name without its type suffix (e.g. ``web``).
+    :param unit_type: The :class:`~django_systemd.defines.SystemdUnitType`.
+    :param path: The template (or rendered file) this unit came from, if known.
+    :param instanceable: True if this is a template unit (its name ends in ``@``).
+    """
+
     name: str
     unit_type: SystemdUnitType
     path: Path | None = None
     instanceable: bool = False
 
+    @property
+    def filename(self) -> str:
+        """The unit file name systemd knows this unit by, e.g. ``web.service``."""
+        return f"{self.name}.{self.unit_type.value}"
+
+    @property
+    def restart_priority(self) -> int:
+        """Lower values are restarted first."""
+        return _RESTART_ORDER.get(self.unit_type, len(_RESTART_ORDER))
+
     @classmethod
     def parse(cls, raw: Path | str) -> "ServiceUnit":
-        path = None
-        name: str
-        if isinstance(raw, Path):
-            name = raw.name
-        else:
-            name = raw
+        """
+        Build a :class:`ServiceUnit` from a unit file name or path.
 
+        :raises ValueError: if the name is not ``<name>.<unit type>``.
+        """
+        path = raw if isinstance(raw, Path) else None
+        name = raw.name if isinstance(raw, Path) else raw
         if mtch := SERVICE_UNIT_REGEX.match(name):
             return cls(
                 name=mtch.groupdict()["name"],
@@ -40,22 +69,6 @@ class ServiceUnit:
                 instanceable="@" in name,
             )
         raise ValueError(f"Unrecognized unit name: '{name}'")
-
-
-@cache
-def service_units() -> dict[str, ServiceUnit]:
-    """
-    Get a dictionary of all recognized systemd service unit types.
-
-    :return: A dictionary mapping unit type names to their corresponding
-        :class:`~django_systemd.config.ServiceUnit` instances.
-    :rtype: Dict[str, :class:`~django_systemd.config.ServiceUnit`]
-    """
-    units = {}
-    for unit_type in SystemdUnitType:
-        unit = ServiceUnit(name="django", unit_type=unit_type)
-        units[unit_type.value] = unit
-    return units
 
 
 @cache
@@ -119,3 +132,29 @@ def render_engine() -> StaticTemplateEngine:
     :rtype: :class:`~render_static.engine.StaticTemplateEngine`
     """
     return StaticTemplateEngine(template_engine_config())
+
+
+def project_units() -> list[ServiceUnit]:
+    """
+    The manifest: every systemd unit template bundled by an installed app.
+
+    Templates are yielded by the render engine in app precedence order, so when two
+    apps provide the same unit name the first one wins and later ones are dropped.
+    Files in a ``systemd/`` directory whose names are not ``<name>.<unit type>`` are
+    ignored.
+
+    :return: Units in discovery order, each with ``path`` set to its template.
+    """
+    seen: set[str] = set()
+    units: list[ServiceUnit] = []
+    for template in render_engine().search(""):
+        name = template.name
+        if not name or name in seen:
+            continue
+        try:
+            unit = ServiceUnit.parse(Path(str(template.origin)))
+        except ValueError:
+            continue
+        seen.add(name)
+        units.append(unit)
+    return units

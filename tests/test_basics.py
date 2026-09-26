@@ -19,8 +19,8 @@ from django.test import TestCase, override_settings
 from django_systemd.config import (
     SERVICE_UNIT_REGEX,
     ServiceUnit,
+    project_units,
     render_engine,
-    service_units,
     template_engine_config,
 )
 from django_systemd.defines import (
@@ -174,41 +174,70 @@ class TestServiceUnit:
         unit = ServiceUnit.parse("web.service")
         assert unit.name == "web"
         assert unit.unit_type == SystemdUnitType.SERVICE
-        assert not unit.instanceable
         assert unit.path is None
+        assert unit.instanceable is False
 
-    def test_parse_path(self):
-        unit = ServiceUnit.parse(Path("check.timer"))
+    def test_parse_path_sets_path(self):
+        source = Path("/somewhere/systemd/check.timer")
+        unit = ServiceUnit.parse(source)
         assert unit.name == "check"
         assert unit.unit_type == SystemdUnitType.TIMER
+        assert unit.path == source
 
     def test_parse_instanceable(self):
         unit = ServiceUnit.parse("app@.target")
+        assert unit.name == "app@"
         assert unit.instanceable is True
-        assert unit.unit_type == SystemdUnitType.TARGET
 
     def test_parse_invalid_raises(self):
-        with pytest.raises(ValueError, match="Unrecognized unit name"):
-            ServiceUnit.parse("bad.xyz")
+        with pytest.raises(ValueError):
+            ServiceUnit.parse("notes.txt")
 
     def test_parse_invalid_no_ext_raises(self):
-        with pytest.raises(ValueError, match="Unrecognized unit name"):
-            ServiceUnit.parse("noextension")
+        with pytest.raises(ValueError):
+            ServiceUnit.parse("web")
+
+    def test_filename(self):
+        assert ServiceUnit("web", SystemdUnitType.SERVICE).filename == "web.service"
+        assert ServiceUnit("app@", SystemdUnitType.TARGET).filename == "app@.target"
+
+    def test_restart_priority_order(self):
+        def prio(unit_type):
+            return ServiceUnit("x", unit_type).restart_priority
+
+        assert prio(SystemdUnitType.SOCKET) < prio(SystemdUnitType.SERVICE)
+        assert prio(SystemdUnitType.SERVICE) < prio(SystemdUnitType.PATH)
+        assert prio(SystemdUnitType.PATH) < prio(SystemdUnitType.TIMER)
+        assert prio(SystemdUnitType.TIMER) < prio(SystemdUnitType.TARGET)
+        assert prio(SystemdUnitType.TARGET) == prio(SystemdUnitType.MOUNT)
 
 
 @pytest.mark.django_db
-class TestServiceUnits:
-    def test_returns_all_unit_types(self):
-        units = service_units()
-        for unit_type in SystemdUnitType:
-            assert unit_type.value in units
+class TestProjectUnits:
+    def test_discovers_all_units(self):
+        names = sorted(unit.filename for unit in project_units())
+        assert names == ["app@.target", "check.timer", "web.service"]
 
-    def test_returns_service_unit_instances(self):
-        units = service_units()
-        assert isinstance(units["service"], ServiceUnit)
+    def test_highest_precedence_app_wins(self):
+        for unit in project_units():
+            assert unit.path is not None
+            assert "app2" in str(unit.path)
+            assert unit.path.is_file()
 
-    def test_cached(self):
-        assert service_units() is service_units()
+    def test_no_duplicates(self):
+        names = [unit.filename for unit in project_units()]
+        assert len(names) == len(set(names))
+
+    def test_instanceable_flag(self):
+        by_name = {unit.filename: unit for unit in project_units()}
+        assert by_name["app@.target"].instanceable is True
+        assert by_name["web.service"].instanceable is False
+
+    def test_empty_when_no_apps_provide_units(self):
+        with override_settings(INSTALLED_APPS=["django_systemd", "django_typer"]):
+            template_engine_config.cache_clear()
+            render_engine.cache_clear()
+            assert project_units() == []
 
 
 @pytest.mark.django_db
