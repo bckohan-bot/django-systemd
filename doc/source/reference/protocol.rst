@@ -5,3 +5,6 @@
 ========
 Protocol
 ========
+
+.. automodule:: django_systemd.protocol
+    :members:

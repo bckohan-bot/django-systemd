@@ -12,11 +12,20 @@
 [![Lint Status](https://github.com/bckohan/django-systemd/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/bckohan/django-systemd/actions/workflows/lint.yml?query=branch:main)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/bckohan/django-systemd/badge)](https://securityscorecards.dev/viewer/?uri=github.com/bckohan/django-systemd)
 
-This package allows tighter integration with systemd in your Django project:
+`django-systemd` does two independent things for a Django deployment:
 
-- [ x ] Bundle systemd files with your apps and render them at deployment time.
-        - Allows overrides based on app-precedence
-        - Uses [django-render-static](https://github.com/bckohan/django-render-static)
-- [ x ] Installation, validation 
-- [  ] Monitoring and basic management of systemd units from the Django admin
+1. **Generate systemd unit files.** Apps bundle unit templates in a `systemd/`
+   directory. Render them at package time with known settings and commit the
+   result, or render them at deploy time from live production settings.
+2. **Manage the project's units.** `django-admin systemd` can list, install,
+   update, restart and reload every unit the project defines, without you
+   naming them. Everything runs in the user scope via `systemctl --user`; nothing
+   runs as root.
+
+```bash
+django-admin systemd list
+django-admin systemd render ./units --context venv=/srv/app/.venv
+django-admin systemd install --enable
+django-admin systemd reload
+```
 

@@ -18,5 +18,4 @@ Reference
    protocol
    config
    defines
-   parser
    signals

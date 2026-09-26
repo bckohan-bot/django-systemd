@@ -1,5 +1,7 @@
 .. include:: ./refs.rst
 
+.. _settings:
+
 ========
 Settings
 ========
