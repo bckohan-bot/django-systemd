@@ -75,20 +75,30 @@ class TestSubprocessSystemdCtl:
         assert exc.value.stderr == "boom"
 
     @pytest.mark.parametrize(
-        "method,verb",
+        "method,verb,args,expected_units",
         [
-            ("restart", "restart"),
-            ("reload", "reload"),
-            ("stop", "stop"),
-            ("enable", "enable"),
-            ("disable", "disable"),
+            (
+                "restart",
+                "restart",
+                ("web.service", "check.timer"),
+                ["web.service", "check.timer"],
+            ),
+            (
+                "reload",
+                "reload",
+                ("web.service", "check.timer"),
+                ["web.service", "check.timer"],
+            ),
+            ("stop", "stop", ("web.service",), ["web.service"]),
+            ("enable", "enable", ("web.service",), ["web.service"]),
+            ("disable", "disable", ("web.service",), ["web.service"]),
         ],
     )
     @mock.patch("django_systemd.protocol.subprocess.run")
-    def test_unit_verbs(self, run, method, verb, tmp_path):
+    def test_unit_verbs(self, run, method, verb, args, expected_units, tmp_path):
         run.return_value = completed()
-        getattr(self._ctl(tmp_path), method)("web.service")
-        assert run.call_args[0][0] == ["systemctl", "--user", verb, "web.service"]
+        getattr(self._ctl(tmp_path), method)(*args)
+        assert run.call_args[0][0] == ["systemctl", "--user", verb, *expected_units]
 
     @pytest.mark.parametrize(
         "stdout,expected",

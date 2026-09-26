@@ -29,6 +29,7 @@ from django.template import TemplateDoesNotExist, TemplateSyntaxError
 from django_typer.management import TyperCommand, command
 
 from django_systemd.config import ServiceUnit, project_units, render_engine
+from django_systemd.defines import SystemdUnitType
 from django_systemd.protocol import SubprocessSystemdCtl, SystemdCtl
 from django_systemd.signals import unit_installed
 
@@ -38,6 +39,13 @@ ContextOption = Annotated[
         "--context",
         "-c",
         help="Override a template context variable as KEY=VALUE. May be repeated.",
+    ),
+]
+
+UnitsArgument = Annotated[
+    list[str] | None,
+    typer.Argument(
+        help="Unit file names to act on. Defaults to every installed project unit."
     ),
 ]
 
@@ -75,6 +83,31 @@ class Command(TyperCommand):
             verb(*args)
         except subprocess.CalledProcessError as err:
             raise CommandError(describe_failure(err)) from err
+
+    def require_systemctl(self) -> None:
+        """Refuse to proceed when systemctl is not available on this system."""
+        if not self.ctl.available:
+            raise CommandError("systemctl is not available on this system.")
+
+    def targets(self, names: list[str]) -> list[ServiceUnit]:
+        """
+        Resolve unit names to project units in restart order.
+
+        Template units (``name@.type``) are never targets because systemctl needs
+        an instance name to act on them. With no names, every installed
+        non-template unit is selected.
+        """
+        by_name = {u.filename: u for u in self.units if not u.instanceable}
+        if names:
+            unknown = [name for name in names if name not in by_name]
+            if unknown:
+                raise CommandError(f"Unknown project unit(s): {', '.join(unknown)}")
+            selected = [by_name[n] for n in dict.fromkeys(names)]
+        else:
+            selected = [
+                u for u in by_name.values() if self.ctl.is_installed(u.filename)
+            ]
+        return sorted(selected, key=lambda u: u.restart_priority)
 
     def render_units(
         self, dest: Path, context: dict[str, str] | None = None
@@ -233,62 +266,55 @@ class Command(TyperCommand):
                 err=True,
             )
 
-    def require_systemctl(self) -> None:
-        if not self.ctl.available:
-            raise CommandError("systemctl is not available on this system.")
-
-    def targets(self, names: list[str]) -> list[ServiceUnit]:
+    @command()
+    def restart(self, units: UnitsArgument = None) -> None:
         """
-        Resolve unit names to project units in restart order.
+        Restart this project's units in a single systemctl transaction.
 
-        Template units (``name@.type``) are never targets because systemctl needs
-        an instance name to act on them. With no names, every installed
-        non-template unit is selected.
+        Restarting sockets and services one at a time does not work: systemd
+        refuses to start a socket whose service is still running. Passing every
+        target to one systemctl invocation lets systemd order the stops and
+        starts itself. A failure therefore reports the whole invocation and
+        nothing is left half done.
         """
-        by_name = {u.filename: u for u in self.units if not u.instanceable}
-        if names:
-            unknown = [name for name in names if name not in by_name]
-            if unknown:
-                raise CommandError(f"Unknown project unit(s): {', '.join(unknown)}")
-            selected = [by_name[name] for name in names]
-        else:
-            selected = [
-                u for u in by_name.values() if self.ctl.is_installed(u.filename)
-            ]
-        return sorted(selected, key=lambda u: u.restart_priority)
+        self.require_systemctl()
+        targets = self.targets(units or [])
+        if not targets:
+            typer.secho("No installed project units to restart.", err=True)
+            return
+        names = [unit.filename for unit in targets]
+        self.run_ctl(self.ctl.restart, *names)
+        typer.echo(f"restarted {' '.join(names)}")
 
     @command()
-    def restart(
-        self,
-        units: Annotated[
-            list[str] | None,
-            typer.Argument(
-                help="Unit file names to restart. Defaults to every installed project unit."
-            ),
-        ] = None,
-    ) -> None:
-        """Restart this project's units: sockets first, then services, paths and timers."""
-        self.require_systemctl()
-        for unit in self.targets(units or []):
-            self.run_ctl(self.ctl.restart, unit.filename)
-            typer.echo(f"restarted {unit.filename}")
+    def reload(self, units: UnitsArgument = None) -> None:
+        """
+        Reload services that support it and are running; restart everything else.
 
-    @command()
-    def reload(
-        self,
-        units: Annotated[
-            list[str] | None,
-            typer.Argument(
-                help="Unit file names to reload. Defaults to every installed project unit."
-            ),
-        ] = None,
-    ) -> None:
-        """Reload units that support it (ExecReload=) and restart the rest."""
+        Only services can define ExecReload=, and systemctl refuses to reload an
+        inactive unit, so anything that is not an active reloadable service is
+        restarted instead, in one systemctl transaction.
+        """
         self.require_systemctl()
-        for unit in self.targets(units or []):
-            if self.ctl.can_reload(unit.filename):
-                self.run_ctl(self.ctl.reload, unit.filename)
-                typer.echo(f"reloaded {unit.filename}")
+        targets = self.targets(units or [])
+        if not targets:
+            typer.secho("No installed project units to reload.", err=True)
+            return
+        to_reload: list[str] = []
+        to_restart: list[str] = []
+        for unit in targets:
+            name = unit.filename
+            if (
+                unit.unit_type is SystemdUnitType.SERVICE
+                and self.ctl.can_reload(name)
+                and self.ctl.is_active(name)
+            ):
+                to_reload.append(name)
             else:
-                self.run_ctl(self.ctl.restart, unit.filename)
-                typer.echo(f"restarted {unit.filename}")
+                to_restart.append(name)
+        if to_reload:
+            self.run_ctl(self.ctl.reload, *to_reload)
+            typer.echo(f"reloaded {' '.join(to_reload)}")
+        if to_restart:
+            self.run_ctl(self.ctl.restart, *to_restart)
+            typer.echo(f"restarted {' '.join(to_restart)}")

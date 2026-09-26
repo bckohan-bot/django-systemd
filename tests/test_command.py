@@ -50,14 +50,14 @@ class FakeCtl:
         self._maybe_fail("daemon-reload")
         self.calls.append(("daemon-reload", ""))
 
-    def restart(self, unit: str) -> None:
-        self._maybe_fail("restart", unit)
-        self.calls.append(("restart", unit))
-        self.active.add(unit)
+    def restart(self, *units: str) -> None:
+        self._maybe_fail("restart", *units)
+        self.calls.append(("restart", " ".join(units)))
+        self.active.update(units)
 
-    def reload(self, unit: str) -> None:
-        self._maybe_fail("reload", unit)
-        self.calls.append(("reload", unit))
+    def reload(self, *units: str) -> None:
+        self._maybe_fail("reload", *units)
+        self.calls.append(("reload", " ".join(units)))
 
     def stop(self, unit: str) -> None:
         self._maybe_fail("stop", unit)
@@ -496,12 +496,9 @@ class TestRestart:
         call_command("systemd", "install")
         fake_ctl.calls.clear()
         call_command("systemd", "restart")
-        assert fake_ctl.calls == [
-            ("restart", "web.service"),
-            ("restart", "check.timer"),
-        ]
+        assert fake_ctl.calls == [("restart", "web.service check.timer")]
         out = capsys.readouterr().out
-        assert "restarted web.service" in out
+        assert "restarted web.service check.timer" in out
 
     def test_only_installed_units_by_default(self, fake_ctl):
         call_command("systemd", "install")
@@ -516,10 +513,11 @@ class TestRestart:
 
     def test_explicit_units_are_ordered(self, fake_ctl):
         call_command("systemd", "restart", "check.timer", "web.service")
-        assert fake_ctl.calls == [
-            ("restart", "web.service"),
-            ("restart", "check.timer"),
-        ]
+        assert fake_ctl.calls == [("restart", "web.service check.timer")]
+
+    def test_duplicate_explicit_units_are_deduped(self, fake_ctl):
+        call_command("systemd", "restart", "web.service", "web.service")
+        assert fake_ctl.calls == [("restart", "web.service")]
 
     def test_unknown_unit(self, fake_ctl):
         with pytest.raises(CommandError, match="nope.service"):
@@ -533,7 +531,9 @@ class TestRestart:
     def test_nothing_installed_is_a_noop(self, fake_ctl, capsys):
         call_command("systemd", "restart")
         assert fake_ctl.calls == []
-        assert "restarted" not in capsys.readouterr().out
+        captured = capsys.readouterr()
+        assert "restarted" not in captured.out
+        assert "No installed project units" in captured.err
 
     def test_failure_is_a_command_error(self, fake_ctl):
         fake_ctl.fail = {"restart": "Job for web.service failed"}
@@ -545,15 +545,29 @@ class TestRestart:
         with pytest.raises(CommandError, match="systemctl"):
             call_command("systemd", "restart")
 
+    def test_socket_and_service_restart_in_one_transaction(self, fake_ctl):
+        with override_settings(
+            INSTALLED_APPS=["tests.apps.app3", *settings.INSTALLED_APPS],
+            SYSTEMD_TEMPLATES=["**/web.socket", "**/web.service"],
+        ):
+            template_engine_config.cache_clear()
+            render_engine.cache_clear()
+            call_command("systemd", "install")
+            fake_ctl.calls.clear()
+            call_command("systemd", "restart")
+        assert fake_ctl.calls == [("restart", "web.socket web.service")]
+
 
 @pytest.mark.django_db
 class TestReload:
     def test_reloads_when_supported_else_restarts(self, fake_ctl, capsys):
         fake_ctl.reloadable.add("web.service")
         call_command("systemd", "install")
+        fake_ctl.active.add("web.service")
         fake_ctl.calls.clear()
         call_command("systemd", "reload")
-        assert fake_ctl.calls == [
+        actions = [c for c in fake_ctl.calls if c[0] in {"restart", "reload"}]
+        assert actions == [
             ("reload", "web.service"),
             ("restart", "check.timer"),
         ]
@@ -561,12 +575,53 @@ class TestReload:
         assert "reloaded web.service" in out
         assert "restarted check.timer" in out
 
+    def test_reload_only_no_restart_call(self, fake_ctl):
+        fake_ctl.reloadable.add("web.service")
+        fake_ctl.active.add("web.service")
+        call_command("systemd", "reload", "web.service")
+        actions = [c for c in fake_ctl.calls if c[0] in {"restart", "reload"}]
+        assert actions == [("reload", "web.service")]
+
+    def test_reload_inactive_service_is_restarted(self, fake_ctl):
+        fake_ctl.reloadable.add("web.service")
+        call_command("systemd", "install")
+        fake_ctl.calls.clear()
+        call_command("systemd", "reload")
+        actions = [c for c in fake_ctl.calls if c[0] in {"restart", "reload"}]
+        assert actions == [("restart", "web.service check.timer")]
+
+    def test_reload_never_queries_non_services(self, fake_ctl):
+        fake_ctl.reloadable.add("web.service")
+        fake_ctl.active.update({"web.service", "check.timer"})
+        call_command("systemd", "install")
+        fake_ctl.calls.clear()
+        original_can_reload = fake_ctl.can_reload
+        calls: list[str] = []
+
+        def recording_can_reload(unit):
+            calls.append(unit)
+            return original_can_reload(unit)
+
+        fake_ctl.can_reload = recording_can_reload  # type: ignore[method-assign]
+        call_command("systemd", "reload")
+        assert calls == ["web.service"]
+
+    def test_nothing_installed_is_a_noop(self, fake_ctl, capsys):
+        call_command("systemd", "reload")
+        actions = [c for c in fake_ctl.calls if c[0] in {"restart", "reload"}]
+        assert actions == []
+        captured = capsys.readouterr()
+        assert "reloaded" not in captured.out
+        assert "restarted" not in captured.out
+        assert "No installed project units" in captured.err
+
     def test_unknown_unit(self, fake_ctl):
         with pytest.raises(CommandError, match="nope.service"):
             call_command("systemd", "reload", "nope.service")
 
     def test_failure_is_a_command_error(self, fake_ctl):
         fake_ctl.reloadable.add("web.service")
+        fake_ctl.active.add("web.service")
         fake_ctl.fail = {"reload": "Failed to reload web.service"}
         with pytest.raises(CommandError, match="Failed to reload web.service"):
             call_command("systemd", "reload", "web.service")
