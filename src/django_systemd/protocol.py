@@ -1,419 +1,170 @@
+"""
+A thin, mockable seam over ``systemctl --user`` and the user unit directory.
+
+django-systemd assumes every unit it manages runs as the deploying user, never as
+root. There is no system scope and no privilege escalation. Anything that needs
+root belongs in your provisioning tooling, not here.
+"""
+
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
-import tempfile
-from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import (
-    Literal,
-    Protocol,
-    cast,
-    runtime_checkable,
-)
+from typing import Protocol, runtime_checkable
 
-from .defines import SystemdScope
 
-UnitState = Literal[
-    "active", "inactive", "failed", "activating", "deactivating", "unknown"
-]
+def user_unit_dir() -> Path:
+    """
+    The directory systemd searches for user units that we install into.
+
+    This is ``$XDG_CONFIG_HOME/systemd/user`` when ``XDG_CONFIG_HOME`` is set,
+    otherwise ``~/.config/systemd/user``.
+    """
+    base = os.environ.get("XDG_CONFIG_HOME")
+    root = Path(base) if base else Path.home() / ".config"
+    return root / "systemd" / "user"
 
 
 @dataclass(frozen=True, slots=True)
 class CommandResult:
+    """The outcome of one systemctl invocation."""
+
     argv: tuple[str, ...]
     returncode: int
     stdout: str
     stderr: str
 
 
-@dataclass(frozen=True, slots=True)
-class UnitStatus:
-    unit: str
-    scope: SystemdScope
-    is_active: bool
-    state: UnitState
-    # Raw `systemctl status` output is handy for logs/UI/error messages
-    raw: str
-
-
-@dataclass(frozen=True, slots=True)
-class InstalledUnit:
-    """
-    Represents the effective destination on disk and whether we had to
-    perform a daemon-reload or enable to activate the install.
-    """
-
-    unit_name: str
-    scope: SystemdScope
-    destination: Path
-    daemon_reloaded: bool
-    enabled: bool
-
-
 @runtime_checkable
 class SystemdCtl(Protocol):
     """
-    A structural interface (Protocol) for a systemctl + unit installer wrapper.
+    What the :class:`systemd command <django_systemd.management.commands.systemd.Command>`
+    needs from systemd. Implement this to swap in a fake for tests or a different
+    transport.
     """
 
-    # --- core systemctl lifecycle
-    def daemon_reload(self, *, scope: SystemdScope = SystemdScope.SYSTEM) -> None: ...
-    def start(
-        self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> None: ...
-    def stop(self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM) -> None: ...
-    def restart(
-        self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> None: ...
-    def reload(
-        self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> None: ...
-    def enable(
-        self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> None: ...
-    def disable(
-        self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> None: ...
-    def mask(self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM) -> None: ...
-    def unmask(
-        self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> None: ...
+    unit_dir: Path
 
-    # --- querying
-    def is_active(
-        self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> bool: ...
-    def is_enabled(
-        self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> bool: ...
-    def status(
-        self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> UnitStatus: ...
-
-    def list_units(
-        self,
-        *,
-        scope: SystemdScope = SystemdScope.SYSTEM,
-        states: Iterable[UnitState] = ("active", "inactive", "failed"),
-    ) -> Sequence[str]:
-        """
-        Return unit names. Typically maps to:
-          systemctl list-units --no-legend --plain --state=...
-        """
+    @property
+    def available(self) -> bool:
+        """True if systemctl can be invoked on this machine."""
         ...
 
-    def list_unit_files(
-        self, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> Mapping[str, str]:
-        """
-        Return mapping unit_name -> enabled_state.
-        Typically maps to:
-          systemctl list-unit-files --no-legend --plain
-        """
+    def daemon_reload(self) -> None: ...
+    def restart(self, unit: str) -> None: ...
+    def reload(self, unit: str) -> None: ...
+    def can_reload(self, unit: str) -> bool:
+        """True if the unit defines a reload action (``ExecReload=``)."""
         ...
 
-    # --- install units
+    def enable(self, unit: str) -> None: ...
+    def disable(self, unit: str) -> None: ...
+    def is_active(self, unit: str) -> bool: ...
+    def is_enabled(self, unit: str) -> bool: ...
+
+    def is_installed(self, name: str) -> bool:
+        """True if a unit file with this name exists in :attr:`unit_dir`."""
+        ...
+
     def install_unit(
-        self,
-        unit_source: Path,
-        *,
-        scope: SystemdScope = SystemdScope.SYSTEM,
-        name: str | None = None,
-        enable: bool = False,
-        daemon_reload: bool = True,
-        mode: int = 0o644,
-    ) -> InstalledUnit:
+        self, source: Path, *, name: str | None = None, mode: int = 0o644
+    ) -> Path:
         """
-        "Install" a unit file onto disk in an appropriate unit search path.
+        Copy ``source`` into :attr:`unit_dir`, replacing any existing file.
 
-        - scope="system": typically /etc/systemd/system
-        - scope="user": typically ~/.config/systemd/user
-
-        Implementations should:
-          - create destination dirs
-          - copy bytes from unit_source to destination (atomic replace preferred)
-          - chmod to `mode`
-          - optionally run daemon-reload
-          - optionally enable the unit (creates symlinks under wants/)
-
-        Note: This is intentionally NOT `systemctl link` vs `install` vs "drop-ins";
-              it's a pragmatic "copy into unit dir" operation.
+        :param source: The rendered unit file to install.
+        :param name: Install under this file name instead of ``source.name``.
+        :param mode: File mode to apply to the installed unit.
+        :return: The path of the installed unit file.
         """
         ...
 
-    def uninstall_unit(
-        self,
-        unit_name: str,
-        *,
-        scope: SystemdScope = SystemdScope.SYSTEM,
-        disable: bool = True,
-        daemon_reload: bool = True,
-    ) -> None:
+    def uninstall_unit(self, name: str) -> bool:
         """
-        Remove installed unit file (and optionally disable it), then reload.
+        Remove the unit file with this name from :attr:`unit_dir`.
+
+        :return: True if a file was removed, False if there was nothing to remove.
         """
+        ...
 
 
 class SubprocessSystemdCtl:
     """
-    Implementation of SystemdCtl using subprocess to call systemctl.
+    :class:`SystemdCtl` implemented by shelling out to ``systemctl --user``.
 
-    If a command fails due to permissions, it retries with sudo.
+    :param unit_dir: Where to install unit files. Defaults to :func:`user_unit_dir`.
     """
 
-    PERMISSION_ERRORS = (
-        "Access denied",
-        "Permission denied",
-        "Interactive authentication required",
-        "authentication required",
-        "polkit",
-    )
+    def __init__(self, unit_dir: Path | None = None) -> None:
+        self.unit_dir = unit_dir or user_unit_dir()
 
-    def _run(
-        self,
-        args: Sequence[str],
-        *,
-        scope: SystemdScope,
-        check: bool = True,
-        use_sudo: bool = False,
-    ) -> CommandResult:
-        """
-        Run a command, retrying with sudo on permission errors.
-        """
-        cmd = ["sudo", *args] if use_sudo else list(args)
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        cmd_result = CommandResult(
+    @property
+    def available(self) -> bool:
+        return shutil.which("systemctl") is not None
+
+    def _systemctl(self, *args: str, check: bool = True) -> CommandResult:
+        cmd = ["systemctl", "--user", *args]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if check and result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode, cmd, result.stdout, result.stderr
+            )
+        return CommandResult(
             argv=tuple(cmd),
             returncode=result.returncode,
             stdout=result.stdout,
             stderr=result.stderr,
         )
 
-        # Check for permission errors and retry with sudo if needed
-        if (
-            not use_sudo
-            and result.returncode != 0
-            and scope == SystemdScope.SYSTEM
-            and any(err in result.stderr for err in self.PERMISSION_ERRORS)
-        ):
-            return self._run(args, scope=scope, check=check, use_sudo=True)
+    def daemon_reload(self) -> None:
+        self._systemctl("daemon-reload")
 
-        if check and result.returncode != 0:
-            raise subprocess.CalledProcessError(
-                result.returncode, cmd, result.stdout, result.stderr
-            )
+    def restart(self, unit: str) -> None:
+        self._systemctl("restart", unit)
 
-        return cmd_result
+    def reload(self, unit: str) -> None:
+        self._systemctl("reload", unit)
 
-    def _systemctl(
-        self,
-        *args: str,
-        scope: SystemdScope,
-        check: bool = True,
-    ) -> CommandResult:
-        """
-        Run systemctl with the appropriate scope flag.
-        """
-        scope_flag = "--user" if scope == SystemdScope.USER else "--system"
-        return self._run(
-            ["systemctl", scope_flag, *args],
-            scope=scope,
-            check=check,
-        )
-
-    def daemon_reload(self, *, scope: SystemdScope = SystemdScope.SYSTEM) -> None:
-        self._systemctl("daemon-reload", scope=scope)
-
-    def start(self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM) -> None:
-        self._systemctl("start", unit, scope=scope)
-
-    def stop(self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM) -> None:
-        self._systemctl("stop", unit, scope=scope)
-
-    def restart(self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM) -> None:
-        self._systemctl("restart", unit, scope=scope)
-
-    def reload(self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM) -> None:
-        self._systemctl("reload", unit, scope=scope)
-
-    def enable(self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM) -> None:
-        self._systemctl("enable", unit, scope=scope)
-
-    def disable(self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM) -> None:
-        self._systemctl("disable", unit, scope=scope)
-
-    def mask(self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM) -> None:
-        self._systemctl("mask", unit, scope=scope)
-
-    def unmask(self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM) -> None:
-        self._systemctl("unmask", unit, scope=scope)
-
-    def is_active(
-        self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> bool:
-        result = self._systemctl("is-active", unit, scope=scope, check=False)
-        return result.stdout.strip() == "active"
-
-    def is_enabled(
-        self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> bool:
-        result = self._systemctl("is-enabled", unit, scope=scope, check=False)
-        return result.stdout.strip() == "enabled"
-
-    def status(
-        self, unit: str, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> UnitStatus:
-        result = self._systemctl("status", unit, scope=scope, check=False)
-        is_active_result = self._systemctl("is-active", unit, scope=scope, check=False)
-        state_str = is_active_result.stdout.strip()
-
-        # Map the state string to a valid UnitState
-        valid_states: set[UnitState] = {
-            "active",
-            "inactive",
-            "failed",
-            "activating",
-            "deactivating",
-            "unknown",
-        }
-        state: UnitState = (
-            cast(UnitState, state_str) if state_str in valid_states else "unknown"
-        )
-
-        return UnitStatus(
-            unit=unit,
-            scope=scope,
-            is_active=(state == "active"),
-            state=state,
-            raw=result.stdout,
-        )
-
-    def list_units(
-        self,
-        *,
-        scope: SystemdScope = SystemdScope.SYSTEM,
-        states: Iterable[UnitState] = ("active", "inactive", "failed"),
-    ) -> Sequence[str]:
-        state_arg = ",".join(states)
+    def can_reload(self, unit: str) -> bool:
         result = self._systemctl(
-            "list-units",
-            "--no-legend",
-            "--plain",
-            f"--state={state_arg}",
-            scope=scope,
+            "show", "--property=CanReload", "--value", unit, check=False
         )
-        units = []
-        for line in result.stdout.strip().splitlines():
-            if line:
-                # First column is the unit name
-                parts = line.split()
-                if parts:
-                    units.append(parts[0])
-        return units
+        return result.stdout.strip() == "yes"
 
-    def list_unit_files(
-        self, *, scope: SystemdScope = SystemdScope.SYSTEM
-    ) -> Mapping[str, str]:
-        result = self._systemctl(
-            "list-unit-files", "--no-legend", "--plain", scope=scope
+    def enable(self, unit: str) -> None:
+        self._systemctl("enable", unit)
+
+    def disable(self, unit: str) -> None:
+        self._systemctl("disable", unit)
+
+    def is_active(self, unit: str) -> bool:
+        return (
+            self._systemctl("is-active", unit, check=False).stdout.strip() == "active"
         )
-        unit_files: dict[str, str] = {}
-        for line in result.stdout.strip().splitlines():
-            if line:
-                parts = line.split()
-                if len(parts) >= 2:
-                    unit_files[parts[0]] = parts[1]
-        return unit_files
+
+    def is_enabled(self, unit: str) -> bool:
+        return (
+            self._systemctl("is-enabled", unit, check=False).stdout.strip() == "enabled"
+        )
+
+    def is_installed(self, name: str) -> bool:
+        return (self.unit_dir / name).is_file()
 
     def install_unit(
-        self,
-        unit_source: Path,
-        *,
-        scope: SystemdScope = SystemdScope.SYSTEM,
-        name: str | None = None,
-        enable: bool = False,
-        daemon_reload: bool = True,
-        mode: int = 0o644,
-    ) -> InstalledUnit:
-        unit_name = name or unit_source.name
-        dest_dir = scope.location[0].expanduser()
-        destination = dest_dir / unit_name
+        self, source: Path, *, name: str | None = None, mode: int = 0o644
+    ) -> Path:
+        self.unit_dir.mkdir(parents=True, exist_ok=True)
+        destination = self.unit_dir / (name or source.name)
+        shutil.copyfile(source, destination)
+        destination.chmod(mode)
+        return destination
 
-        if scope == SystemdScope.USER:
-            # User scope: direct file operations
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(unit_source, destination)
-            destination.chmod(mode)
-        else:
-            # System scope: may need sudo for file operations
-            try:
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(unit_source, destination)
-                destination.chmod(mode)
-            except PermissionError:
-                # Use sudo to copy the file
-                self._run(["mkdir", "-p", str(dest_dir)], scope=scope, use_sudo=True)
-                # Copy to temp file first, then sudo mv to destination
-                with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                    tmp_path = Path(tmp.name)
-                    shutil.copy2(unit_source, tmp_path)
-                    tmp_path.chmod(mode)
-                self._run(
-                    ["cp", str(tmp_path), str(destination)], scope=scope, use_sudo=True
-                )
-                self._run(
-                    ["chmod", oct(mode)[2:], str(destination)],
-                    scope=scope,
-                    use_sudo=True,
-                )
-                tmp_path.unlink()
-
-        reloaded = False
-        if daemon_reload:
-            self.daemon_reload(scope=scope)
-            reloaded = True
-
-        enabled = False
-        if enable:
-            self.enable(unit_name, scope=scope)
-            enabled = True
-
-        return InstalledUnit(
-            unit_name=unit_name,
-            scope=scope,
-            destination=destination,
-            daemon_reloaded=reloaded,
-            enabled=enabled,
-        )
-
-    def uninstall_unit(
-        self,
-        unit_name: str,
-        *,
-        scope: SystemdScope = SystemdScope.SYSTEM,
-        disable: bool = True,
-        daemon_reload: bool = True,
-    ) -> None:
-        if disable:
-            # Ignore errors if unit is not enabled
-            try:
-                self.disable(unit_name, scope=scope)
-            except subprocess.CalledProcessError:
-                pass
-
-        dest_dir = scope.location[0].expanduser()
-        destination = dest_dir / unit_name
-
-        if destination.exists():
-            if scope == SystemdScope.USER:
-                destination.unlink()
-            else:
-                try:
-                    destination.unlink()
-                except PermissionError:
-                    self._run(["rm", str(destination)], scope=scope, use_sudo=True)
-
-        if daemon_reload:
-            self.daemon_reload(scope=scope)
+    def uninstall_unit(self, name: str) -> bool:
+        destination = self.unit_dir / name
+        if destination.is_file():
+            destination.unlink()
+            return True
+        return False

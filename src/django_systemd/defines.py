@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from enum_properties import StrEnumProperties
 
 
@@ -48,14 +46,4 @@ class SystemdRestartType(StrEnumProperties):
     ON_WATCHDOG  = "on-watchdog", "Restarts only if the watchdog timeout is triggered."
     ON_ABORT     = "on-abort",    "Restarts on exit due to an uncaught signal not defined as clean."
     ALWAYS       = "always",      "Restarts regardless of exit status, signal termination, or timeout. "
-    # fmt: on
-
-
-class SystemdScope(StrEnumProperties):
-    location: list[Path]
-    description: str
-
-    # fmt: off
-    USER   = "user",   [Path("~/.config/systemd/user")], "Units are installed for the current user session."
-    SYSTEM = "system", [Path("/etc/systemd/system")], "Units are installed system-wide."
     # fmt: on
