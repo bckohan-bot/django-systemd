@@ -91,8 +91,10 @@ class Command(TyperCommand):
 
     def targets(self, names: list[str]) -> list[ServiceUnit]:
         """
-        Resolve unit names to project units in restart order.
+        Resolve unit names to project units.
 
+        The priority sort only makes the invocation and its output
+        deterministic; systemd orders the jobs itself within the transaction.
         Template units (``name@.type``) are never targets because systemctl needs
         an instance name to act on them. With no names, every installed
         non-template unit is selected.
@@ -274,8 +276,8 @@ class Command(TyperCommand):
         Restarting sockets and services one at a time does not work: systemd
         refuses to start a socket whose service is still running. Passing every
         target to one systemctl invocation lets systemd order the stops and
-        starts itself. A failure therefore reports the whole invocation and
-        nothing is left half done.
+        starts itself. A failure reports the whole invocation; systemctl's
+        output names the job that failed.
         """
         self.require_systemctl()
         targets = self.targets(units or [])
@@ -293,7 +295,8 @@ class Command(TyperCommand):
 
         Only services can define ExecReload=, and systemctl refuses to reload an
         inactive unit, so anything that is not an active reloadable service is
-        restarted instead, in one systemctl transaction.
+        restarted instead, in one systemctl transaction. A socket paired with a
+        service that reloads in place is left as it is.
         """
         self.require_systemctl()
         targets = self.targets(units or [])
@@ -301,7 +304,7 @@ class Command(TyperCommand):
             typer.secho("No installed project units to reload.", err=True)
             return
         to_reload: list[str] = []
-        to_restart: list[str] = []
+        to_restart: list[ServiceUnit] = []
         for unit in targets:
             name = unit.filename
             if (
@@ -311,10 +314,24 @@ class Command(TyperCommand):
             ):
                 to_reload.append(name)
             else:
-                to_restart.append(name)
+                to_restart.append(unit)
+        # A listening socket whose service is reloaded in place needs no action,
+        # and systemd would refuse to restart it while the service runs.
+        kept = [
+            u
+            for u in to_restart
+            if u.unit_type is SystemdUnitType.SOCKET
+            and f"{u.name}.service" in to_reload
+        ]
+        to_restart = [u for u in to_restart if u not in kept]
+        for unit in kept:
+            typer.echo(
+                f"kept {unit.filename} listening; {unit.name}.service reloads in place"
+            )
+        if to_restart:
+            names = [u.filename for u in to_restart]
+            self.run_ctl(self.ctl.restart, *names)
+            typer.echo(f"restarted {' '.join(names)}")
         if to_reload:
             self.run_ctl(self.ctl.reload, *to_reload)
             typer.echo(f"reloaded {' '.join(to_reload)}")
-        if to_restart:
-            self.run_ctl(self.ctl.restart, *to_restart)
-            typer.echo(f"restarted {' '.join(to_restart)}")
