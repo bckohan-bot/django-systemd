@@ -22,7 +22,7 @@ from typing import Annotated
 
 import typer
 from django.core.management import CommandError
-from django.template.exceptions import TemplateDoesNotExist
+from django.template import TemplateDoesNotExist, TemplateSyntaxError
 from django_typer.management import TyperCommand, command
 
 from django_systemd.config import ServiceUnit, project_units, render_engine
@@ -76,9 +76,13 @@ class Command(TyperCommand):
                     unit.template, dest=target, context=context or None
                 ):
                     rendered.append((unit, Path(render.destination)))
-            except TemplateDoesNotExist as err:
+            except Exception as err:
                 target.unlink(missing_ok=True)
-                raise CommandError(f"Failed to render {unit.template}: {err}") from err
+                if isinstance(err, (TemplateDoesNotExist, TemplateSyntaxError)):
+                    raise CommandError(
+                        f"Failed to render {unit.template}: {err}"
+                    ) from err
+                raise
         return rendered
 
     @command(name="list")

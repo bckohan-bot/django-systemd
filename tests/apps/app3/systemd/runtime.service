@@ -1,0 +1,2 @@
+[Unit]
+Description={% url "no-such-route" %}

@@ -171,6 +171,15 @@ class TestServiceUnit:
         assert unit.name == "my.app"
         assert unit.unit_type == SystemdUnitType.TIMER
 
+    def test_template_defaults_to_filename(self):
+        assert ServiceUnit.parse("web.service").template == "web.service"
+        assert (
+            ServiceUnit(
+                "web", SystemdUnitType.SERVICE, template="sub/web.service"
+            ).template
+            == "sub/web.service"
+        )
+
     def test_instance_is_not_instanceable(self):
         assert ServiceUnit.parse("worker@1.service").instanceable is False
         assert ServiceUnit.parse("worker@.service").instanceable is True
@@ -218,6 +227,18 @@ class TestProjectUnits:
         assert by_name["my.app.timer"].name == "my.app"
         assert "bad name.service" not in by_name
         assert any("bad name.service" in rec.message for rec in caplog.records)
+
+    def test_cross_name_shadowing_warns(self, caplog):
+        apps = ["tests.apps.app3", *settings.INSTALLED_APPS]
+        with override_settings(
+            INSTALLED_APPS=apps, SYSTEMD_TEMPLATES=["**/web.service"]
+        ):
+            template_engine_config.cache_clear()
+            render_engine.cache_clear()
+            with caplog.at_level("WARNING", logger="django_systemd.config"):
+                units = project_units()
+        assert [u.filename for u in units] == ["web.service"]
+        assert any("already provided by template" in r.message for r in caplog.records)
 
 
 @pytest.mark.django_db

@@ -229,13 +229,27 @@ class TestRender:
     def test_broken_template_errors_without_partial_output(self, fake_ctl, tmp_path):
         with override_settings(
             INSTALLED_APPS=["tests.apps.app3", *settings.INSTALLED_APPS],
-            SYSTEMD_TEMPLATES=["**/*.service"],
+            SYSTEMD_TEMPLATES=["**/broken.service"],
         ):
             template_engine_config.cache_clear()
             render_engine.cache_clear()
             with pytest.raises(CommandError, match="broken.service"):
                 call_command("systemd", "render", str(tmp_path))
         assert not (tmp_path / "broken.service").exists()
+
+    def test_non_template_error_still_cleans_up(self, fake_ctl, tmp_path):
+        from django.conf import settings
+        from django.urls import NoReverseMatch
+
+        apps = ["tests.apps.app3", *settings.INSTALLED_APPS]
+        with override_settings(
+            INSTALLED_APPS=apps, SYSTEMD_TEMPLATES=["**/runtime.service"]
+        ):
+            template_engine_config.cache_clear()
+            render_engine.cache_clear()
+            with pytest.raises(NoReverseMatch):
+                call_command("systemd", "render", str(tmp_path))
+        assert not (tmp_path / "runtime.service").exists()
 
     def test_systemd_templates_setting_scopes_render(self, fake_ctl, tmp_path):
         with override_settings(

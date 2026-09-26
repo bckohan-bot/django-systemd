@@ -48,6 +48,10 @@ class ServiceUnit:
     instanceable: bool = False
     template: str = ""
 
+    def __post_init__(self) -> None:
+        if not self.template:
+            self.template = self.filename
+
     @property
     def filename(self) -> str:
         """The unit file name systemd knows this unit by, e.g. ``web.service``."""
@@ -150,13 +154,16 @@ def project_units() -> list[ServiceUnit]:
     collapsed here by unit file name. Files that match a pattern but are not
     valid ``<name>.<unit type>`` names are skipped with a warning.
 
+    When two templates produce the same unit file name, the first one
+    discovered wins and a warning is logged.
+
     :return: Units in discovery order, each with ``path`` set to its template
         file and ``template`` set to the name the render engine knows it by.
     """
     from django.template.exceptions import TemplateDoesNotExist
 
     engine = render_engine()
-    seen: set[str] = set()
+    seen: dict[str, str] = {}
     units: list[ServiceUnit] = []
     for pattern in template_engine_config()["templates"]:
         try:
@@ -167,10 +174,17 @@ def project_units() -> list[ServiceUnit]:
                 except ValueError as err:
                     logger.warning("Ignoring %s: %s", origin, err)
                     continue
+                template_name = render.template.origin.template_name
                 if unit.filename in seen:
+                    logger.warning(
+                        "Ignoring %s: unit file %s is already provided by template %s",
+                        origin,
+                        unit.filename,
+                        seen[unit.filename],
+                    )
                     continue
-                unit.template = render.template.origin.template_name
-                seen.add(unit.filename)
+                unit.template = template_name
+                seen[unit.filename] = template_name
                 units.append(unit)
         except TemplateDoesNotExist:
             continue
