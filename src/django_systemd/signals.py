@@ -1,21 +1,19 @@
 """
 All :pypi:`django-systemd` specific :doc:`django:topics/signals` are defined here.
-
-All signals contain a ``unit`` field that holds the
-:class:`~django_systemd.config.ServiceUnit` of the routine in question.
 """
 
 from django.dispatch import Signal
 
 unit_installed = Signal()
 """
-Signal sent when a routine is started, but before any commands have been run.
+Sent by ``django-admin systemd install`` after each unit file has been copied into
+the user unit directory, before ``daemon-reload`` runs.
 
 **Signature:**
-``(sender, unit, **kwargs)``
+``(sender, unit, destination, **kwargs)``
 
-:param sender: An instance of the running systemd command.
-:type sender: :class:`Systemd Command <django_systemd.management.commands.systemd.Command>`
-:param unit: The service unit associated with the signal.
-:type unit: :class:`~django_systemd.config.ServiceUnit`
+:param sender: The running :class:`~django_systemd.management.commands.systemd.Command`
+    instance.
+:param unit: The :class:`~django_systemd.config.ServiceUnit` that was installed.
+:param destination: The :class:`~pathlib.Path` of the installed unit file.
 """

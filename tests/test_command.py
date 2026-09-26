@@ -13,9 +13,10 @@ from django.conf import settings
 from django.core.management import CommandError, call_command
 from django.test import override_settings
 
-from django_systemd.config import render_engine, template_engine_config
+from django_systemd.config import ServiceUnit, render_engine, template_engine_config
 from django_systemd.management.commands.systemd import parse_context
 from django_systemd.protocol import SystemdCtl
+from django_systemd.signals import unit_installed
 
 
 class FakeCtl:
@@ -274,6 +275,122 @@ class TestRender:
         content = (tmp_path / "web.service").read_text()
         assert "nested web (app3)" in content
         assert not (tmp_path / "sub").exists()
+
+
+@pytest.mark.django_db
+class TestInstall:
+    def test_installs_every_unit_and_reloads_once(self, fake_ctl, capsys):
+        call_command("systemd", "install")
+        installed = {f.name for f in fake_ctl.unit_dir.iterdir()}
+        assert installed == {"web.service", "check.timer", "app@.target"}
+        assert "app2 override" in (fake_ctl.unit_dir / "web.service").read_text()
+        assert fake_ctl.calls == [("daemon-reload", "")]
+        out = capsys.readouterr().out
+        assert str(fake_ctl.unit_dir / "web.service") in out
+
+    def test_rerun_updates_in_place(self, fake_ctl):
+        call_command("systemd", "install")
+        (fake_ctl.unit_dir / "web.service").write_text("stale")
+        call_command("systemd", "install")
+        assert "stale" not in (fake_ctl.unit_dir / "web.service").read_text()
+
+    def test_enable_skips_template_units(self, fake_ctl):
+        call_command("systemd", "install", "--enable")
+        enabled = {unit for verb, unit in fake_ctl.calls if verb == "enable"}
+        assert enabled == {"web.service", "check.timer"}
+        assert fake_ctl.calls.index(("daemon-reload", "")) < fake_ctl.calls.index(
+            ("enable", "web.service")
+        )
+
+    def test_context_overrides(self, fake_ctl):
+        call_command("systemd", "install", "-c", "venv=/srv/app/.venv")
+        assert (
+            "WorkingDirectory=/srv/app/.venv"
+            in (fake_ctl.unit_dir / "web.service").read_text()
+        )
+
+    def test_source_dir_skips_rendering(self, fake_ctl, tmp_path):
+        source = tmp_path / "prerendered"
+        source.mkdir()
+        for name in ("web.service", "check.timer", "app@.target"):
+            (source / name).write_text(f"prerendered {name}")
+        call_command("systemd", "install", "--source", str(source))
+        assert (
+            fake_ctl.unit_dir / "web.service"
+        ).read_text() == "prerendered web.service"
+
+    def test_source_dir_missing_unit_errors(self, fake_ctl, tmp_path):
+        source = tmp_path / "prerendered"
+        source.mkdir()
+        (source / "web.service").write_text("x")
+        with pytest.raises(CommandError, match="check.timer"):
+            call_command("systemd", "install", "--source", str(source))
+        assert not fake_ctl.unit_dir.exists()
+
+    def test_sends_unit_installed(self, fake_ctl):
+        received: list[dict] = []
+
+        def receiver(sender, **kwargs):
+            received.append({"sender": sender, **kwargs})
+
+        unit_installed.connect(receiver)
+        try:
+            call_command("systemd", "install")
+        finally:
+            unit_installed.disconnect(receiver)
+        assert len(received) == 3
+        for event in received:
+            assert type(event["sender"]).__name__ == "Command"
+            assert isinstance(event["unit"], ServiceUnit)
+            assert event["destination"] == fake_ctl.unit_dir / event["unit"].filename
+
+    def test_no_units_errors(self, fake_ctl, no_units):
+        with pytest.raises(CommandError, match="No systemd unit templates"):
+            call_command("systemd", "install")
+
+    def test_without_systemctl_still_copies(self, make_ctl):
+        ctl = make_ctl(available=False)
+        call_command("systemd", "install", "--enable")
+        assert (ctl.unit_dir / "web.service").is_file()
+        assert ctl.calls == []
+
+
+@pytest.mark.django_db
+class TestUninstall:
+    def test_disables_removes_reloads(self, fake_ctl, capsys):
+        call_command("systemd", "install", "--enable")
+        fake_ctl.calls.clear()
+        call_command("systemd", "uninstall")
+        assert not any(fake_ctl.unit_dir.iterdir())
+        disabled = {unit for verb, unit in fake_ctl.calls if verb == "disable"}
+        assert disabled == {"web.service", "check.timer"}
+        assert fake_ctl.calls[-1] == ("daemon-reload", "")
+        out = capsys.readouterr().out
+        assert "removed web.service" in out
+
+    def test_nothing_installed_is_a_noop(self, fake_ctl, capsys):
+        call_command("systemd", "uninstall")
+        assert "removed" not in capsys.readouterr().out
+        assert fake_ctl.calls[-1] == ("daemon-reload", "")
+
+    def test_disable_failure_is_ignored(self, fake_ctl):
+        import subprocess
+
+        call_command("systemd", "install")
+
+        def failing_disable(unit):
+            raise subprocess.CalledProcessError(1, ["systemctl"], "", "not enabled")
+
+        fake_ctl.disable = failing_disable  # type: ignore[method-assign]
+        call_command("systemd", "uninstall")
+        assert not any(fake_ctl.unit_dir.iterdir())
+
+    def test_without_systemctl_still_removes(self, make_ctl):
+        ctl = make_ctl(available=False)
+        call_command("systemd", "install")
+        call_command("systemd", "uninstall")
+        assert not any(ctl.unit_dir.iterdir())
+        assert ctl.calls == []
 
 
 class TestParseContext:

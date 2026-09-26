@@ -16,6 +16,8 @@ runs as root.
 
 from __future__ import annotations
 
+import subprocess
+import tempfile
 from functools import cached_property
 from pathlib import Path
 from typing import Annotated
@@ -27,6 +29,7 @@ from django_typer.management import TyperCommand, command
 
 from django_systemd.config import ServiceUnit, project_units, render_engine
 from django_systemd.protocol import SubprocessSystemdCtl, SystemdCtl
+from django_systemd.signals import unit_installed
 
 ContextOption = Annotated[
     list[str] | None,
@@ -124,3 +127,72 @@ class Command(TyperCommand):
         )
         for _, path in rendered:
             typer.echo(str(path))
+
+    @command()
+    def install(
+        self,
+        source: Annotated[
+            Path | None,
+            typer.Option(
+                "--source",
+                help="Install pre-rendered unit files from this directory instead of rendering now.",
+                exists=True,
+                file_okay=False,
+            ),
+        ] = None,
+        enable: Annotated[
+            bool,
+            typer.Option(
+                "--enable/--no-enable", help="Enable the units after installing."
+            ),
+        ] = False,
+        context: ContextOption = None,
+    ) -> None:
+        """
+        Install this project's units into the user unit directory.
+
+        Units are rendered first unless --source points at pre-rendered files.
+        Running install again replaces the installed files, so this is also how
+        you update units after a deploy.
+        """
+        if not self.units:
+            raise CommandError("No systemd unit templates found.")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            if source is None:
+                files = self.render_units(Path(tmp), parse_context(context or []))
+            else:
+                # Pre-rendered units are flat files named by unit file name, exactly
+                # as `systemd render` writes them.
+                files = [(unit, source / unit.filename) for unit in self.units]
+                missing = [path.name for _, path in files if not path.is_file()]
+                if missing:
+                    raise CommandError(
+                        f"Missing unit files in {source}: {', '.join(missing)}"
+                    )
+            for unit, path in files:
+                destination = self.ctl.install_unit(path)
+                unit_installed.send(sender=self, unit=unit, destination=destination)
+                typer.echo(str(destination))
+
+        if not self.ctl.available:
+            return
+        self.ctl.daemon_reload()
+        if enable:
+            for unit in self.units:
+                if not unit.instanceable:
+                    self.ctl.enable(unit.filename)
+
+    @command()
+    def uninstall(self) -> None:
+        """Disable and remove this project's units from the user unit directory."""
+        for unit in self.units:
+            if self.ctl.available and not unit.instanceable:
+                try:
+                    self.ctl.disable(unit.filename)
+                except subprocess.CalledProcessError:
+                    pass
+            if self.ctl.uninstall_unit(unit.filename):
+                typer.echo(f"removed {unit.filename}")
+        if self.ctl.available:
+            self.ctl.daemon_reload()
