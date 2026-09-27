@@ -131,6 +131,9 @@ Two systemd behaviours to know about:
   Restart the pair together (the default, with no names given) or name both.
 - The socket-to-service pairing assumes the default ``<name>.service``. A socket
   that sets ``Service=`` to a different unit is restarted like any other unit.
+- A service triggered by a timer or path unit of the same name (typically a
+  oneshot job) is not restarted by default, because that would run the job.
+  Name it explicitly to restart it.
 
 Restart units from a deployment routine
 ---------------------------------------

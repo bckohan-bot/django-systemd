@@ -97,7 +97,11 @@ class Command(TyperCommand):
         deterministic; systemd orders the jobs itself within the transaction.
         Template units (``name@.type``) are never targets because systemctl needs
         an instance name to act on them. With no names, every installed
-        non-template unit is selected.
+        non-template unit is selected, except that a service with a timer or
+        path unit of the same name is dropped: that service is triggered by
+        its timer or path (typically a oneshot job) and restarting it directly
+        would run the job, not just make it ready to run. Naming the service
+        explicitly still restarts it.
         """
         by_name = {u.filename: u for u in self.units if not u.instanceable}
         if names:
@@ -108,6 +112,16 @@ class Command(TyperCommand):
         else:
             selected = [
                 u for u in by_name.values() if self.ctl.is_installed(u.filename)
+            ]
+            triggered = {
+                u.name
+                for u in selected
+                if u.unit_type in (SystemdUnitType.TIMER, SystemdUnitType.PATH)
+            }
+            selected = [
+                u
+                for u in selected
+                if not (u.unit_type is SystemdUnitType.SERVICE and u.name in triggered)
             ]
         return sorted(selected, key=lambda u: u.restart_priority)
 

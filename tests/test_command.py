@@ -568,6 +568,30 @@ class TestRestart:
             call_command("systemd", "restart")
         assert fake_ctl.calls == [("restart", ("web.socket", "web.service"))]
 
+    def test_timer_triggered_service_is_left_to_its_timer(self, fake_ctl):
+        with override_settings(
+            INSTALLED_APPS=["tests.apps.app3", *settings.INSTALLED_APPS],
+            SYSTEMD_TEMPLATES=["**/cleanup.*"],
+        ):
+            template_engine_config.cache_clear()
+            render_engine.cache_clear()
+            call_command("systemd", "install")
+            fake_ctl.calls.clear()
+            call_command("systemd", "restart")
+        assert fake_ctl.calls == [("restart", ("cleanup.timer",))]
+
+    def test_timer_triggered_service_can_be_named_explicitly(self, fake_ctl):
+        with override_settings(
+            INSTALLED_APPS=["tests.apps.app3", *settings.INSTALLED_APPS],
+            SYSTEMD_TEMPLATES=["**/cleanup.*"],
+        ):
+            template_engine_config.cache_clear()
+            render_engine.cache_clear()
+            call_command("systemd", "install")
+            fake_ctl.calls.clear()
+            call_command("systemd", "restart", "cleanup.service")
+        assert fake_ctl.calls == [("restart", ("cleanup.service",))]
+
 
 @pytest.mark.django_db
 class TestReload:
@@ -669,3 +693,16 @@ class TestReload:
         make_ctl(available=False)
         with pytest.raises(CommandError, match="systemctl"):
             call_command("systemd", "reload")
+
+    def test_timer_triggered_service_is_left_to_its_timer(self, fake_ctl):
+        with override_settings(
+            INSTALLED_APPS=["tests.apps.app3", *settings.INSTALLED_APPS],
+            SYSTEMD_TEMPLATES=["**/cleanup.*"],
+        ):
+            template_engine_config.cache_clear()
+            render_engine.cache_clear()
+            call_command("systemd", "install")
+            fake_ctl.calls.clear()
+            call_command("systemd", "reload")
+        actions = [c for c in fake_ctl.calls if c[0] in {"restart", "reload"}]
+        assert actions == [("restart", ("cleanup.timer",))]
