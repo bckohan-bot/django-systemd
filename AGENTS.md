@@ -74,14 +74,13 @@ Django versions are selected at test-run time via mutually exclusive `uv` depend
 ## Architecture
 
 **Core components**:
-- `defines.py`: Enum definitions using `enum-properties` for systemd unit types (`SystemdUnitType`), startup types, restart types, and scope (user/system)
+- `defines.py`: Dataclass enums (`SystemdEnum`) for systemd unit types (`SystemdUnitType`), startup types and restart types; each member's `value` is the literal systemd string and it carries a `description`
 - `config.py`: Template engine configuration using `django-render-static` to discover and render systemd unit templates from app `systemd/` directories
 - `management/commands/systemd.py`: Django management command built with `django-typer`
 
 **Key dependencies**:
 - `django-render-static`: Template discovery and rendering engine for finding systemd units in app directories
 - `django-typer`: CLI framework for the `systemd` management command
-- `enum-properties`: Extended enums with additional properties (descriptions, paths, etc.)
 
 **Template system**: Apps can bundle systemd unit templates in their `systemd/` subdirectory. The engine uses `StaticAppDirectoriesBatchLoader` to find templates matching `**/*.{service,socket,timer,...}` patterns. Templates have access to `settings`, `venv`, `python`, `django-admin`, and `DJANGO_SETTINGS_MODULE` in their context.
 

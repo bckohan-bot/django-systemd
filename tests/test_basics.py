@@ -56,6 +56,28 @@ class TestSystemdUnitType:
     def test_count(self):
         assert len(list(SystemdUnitType)) == 12
 
+    def test_value_is_the_literal_string(self):
+        assert SystemdUnitType.SERVICE.value == "service"
+        assert SystemdUnitType.SERVICE.literal == "service"
+        assert repr(SystemdUnitType.SERVICE) == "<SystemdUnitType.SERVICE: 'service'>"
+
+    def test_lookup_by_value(self):
+        assert SystemdUnitType("timer") is SystemdUnitType.TIMER
+        with pytest.raises(ValueError):
+            SystemdUnitType("nope")
+        assert SystemdUnitType.from_literal("timer") is SystemdUnitType.TIMER
+        assert SystemdStartupType.from_literal("notify-reload") is (
+            SystemdStartupType.NOTIFY_RELOAD
+        )
+        with pytest.raises(ValueError):
+            SystemdUnitType.from_literal("nope")
+
+    def test_members_are_hashable_and_distinct(self):
+        lookup = {SystemdUnitType.SERVICE: 1, SystemdUnitType.TIMER: 2}
+        assert lookup[SystemdUnitType.TIMER] == 2
+        assert SystemdUnitType.SERVICE != SystemdUnitType.TIMER
+        assert SystemdUnitType.SERVICE != "service"
+
 
 class TestSystemdStartupType:
     def test_all_values(self):

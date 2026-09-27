@@ -545,9 +545,9 @@ name = "django"
 version = "5.2.17"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version < '3.12'",
     "python_full_version >= '3.15'",
     "python_full_version >= '3.12' and python_full_version < '3.15'",
+    "python_full_version < '3.12'",
 ]
 dependencies = [
     { name = "asgiref", marker = "python_full_version < '3.12' or extra == 'group-14-django-systemd-dj52'" },
@@ -635,7 +635,6 @@ dependencies = [
     { name = "django", version = "6.1.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra != 'group-14-django-systemd-dj52') or (extra == 'group-14-django-systemd-dj52' and extra == 'group-14-django-systemd-dj61')" },
     { name = "django-render-static" },
     { name = "django-typer" },
-    { name = "enum-properties" },
 ]
 
 [package.optional-dependencies]
@@ -734,7 +733,6 @@ requires-dist = [
     { name = "django", specifier = ">=5.2,<6.2" },
     { name = "django-render-static", specifier = ">=3.5.0" },
     { name = "django-typer", specifier = ">=3.5.1" },
-    { name = "enum-properties", specifier = ">=2.4.1" },
     { name = "rich", marker = "extra == 'rich'", specifier = ">=10.11.0,<16.0.0" },
 ]
 provides-extras = ["rich"]
@@ -847,15 +845,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ae/ed/aefcc8cd0ba62a0560c3c18c33925362d46c6075480bfa4df87b28e169a9/docutils-0.21.2.tar.gz", hash = "sha256:3a6b18732edf182daa3cd12775bbb338cf5691468f91eeeb109deff6ebfa986f", size = 2204444, upload-time = "2024-04-23T18:57:18.24Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8f/d7/9322c609343d929e75e7e5e6255e614fcc67572cfd083959cdef3b7aad79/docutils-0.21.2-py3-none-any.whl", hash = "sha256:dafca5b9e384f0e419294eb4d2ff9fa826435bf15f15b7bd45723e8ad76811b2", size = 587408, upload-time = "2024-04-23T18:57:14.835Z" },
-]
-
-[[package]]
-name = "enum-properties"
-version = "2.8.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a1/63/52b1041f2585990bb7467ae7383a0f2d79deaea83cf175057bc44c9a923b/enum_properties-2.8.1.tar.gz", hash = "sha256:17c9e9b491247f750a094552be1925dd58a8de2baf6a4660f0554358a779fe5e", size = 80209, upload-time = "2026-09-02T21:04:48.596Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/89/de/3de62699d8fc898a312b2fd60f4590d2e039bdb9a6d8320a8137c94a8e0c/enum_properties-2.8.1-py3-none-any.whl", hash = "sha256:2ef280242c8a61e1c508681607f91470263c09cf896b74afcb50c6ba4eb76b5b", size = 15990, upload-time = "2026-09-02T21:04:47.409Z" },
 ]
 
 [[package]]
