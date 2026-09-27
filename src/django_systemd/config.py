@@ -18,9 +18,10 @@ unit_types = "|".join(re.escape(typ.value) for typ in SystemdUnitType)
 
 SERVICE_UNIT_REGEX = re.compile(rf"^(?P<name>[\w.@-]+)\.(?P<type>{unit_types})$")
 
-# The order units should be restarted in. Sockets must be up before the services
-# they activate, paths and timers trigger services so they go after. Anything not
-# listed is restarted last.
+# A deterministic sort key for the order units are invoked and reported in.
+# Sockets sort before the services they activate, paths and timers sort after.
+# Anything not listed sorts last. systemd itself orders the jobs within the
+# transaction; this only makes the invocation and its output reproducible.
 _RESTART_ORDER: dict[SystemdUnitType, int] = {
     SystemdUnitType.SOCKET: 0,
     SystemdUnitType.SERVICE: 1,
@@ -59,7 +60,10 @@ class ServiceUnit:
 
     @property
     def restart_priority(self) -> int:
-        """Lower values are restarted first."""
+        """
+        A deterministic sort key for invocation and output order; lower values
+        sort first. systemd itself orders the jobs within the transaction.
+        """
         return _RESTART_ORDER.get(self.unit_type, len(_RESTART_ORDER))
 
     @classmethod

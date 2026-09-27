@@ -51,6 +51,10 @@ in :pypi:`django-systemd` runs as root. Two consequences:
 
 - Enabling lingering also keeps your services running after you log out.
 
+All projects deployed as the same user share one unit directory. Prefix your
+unit names per project (for example ``myproject-web.service``) so they do not
+collide with another project's units in the same unit directory.
+
 .. note::
 
     **Developing without systemd**
@@ -164,3 +168,8 @@ Remove the units
 
 This stops and disables each installed unit, removes its file, and reloads the
 daemon. It is safe to run when nothing is installed.
+
+Units whose templates are removed from the project are not uninstalled
+automatically: ``uninstall`` only acts on units the current manifest still
+knows about. Run ``uninstall`` before removing a template from your project,
+or delete the installed unit file by hand.

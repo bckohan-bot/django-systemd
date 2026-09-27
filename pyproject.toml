@@ -60,9 +60,6 @@ conflicts = [
 packages = ["src/django_systemd"]
 
 [project.optional-dependencies]
-systemd = [
-    "python-systemd; sys_platform == 'linux'",
-]
 rich = [
     "rich>=10.11.0,<16.0.0",
 ]

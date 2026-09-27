@@ -69,6 +69,11 @@ def parse_context(pairs: list[str]) -> dict[str, str]:
 
 
 class Command(TyperCommand):
+    """
+    The ``systemd`` management command: list, render, install, uninstall,
+    restart and reload this project's units.
+    """
+
     @cached_property
     def ctl(self) -> SystemdCtl:
         return SubprocessSystemdCtl()
@@ -104,7 +109,13 @@ class Command(TyperCommand):
         explicitly still restarts it.
         """
         by_name = {u.filename: u for u in self.units if not u.instanceable}
+        template_names = {u.filename for u in self.units if u.instanceable}
         if names:
+            templates = [name for name in names if name in template_names]
+            if templates:
+                raise CommandError(
+                    f"Template units cannot be restarted directly: {', '.join(templates)}"
+                )
             unknown = [name for name in names if name not in by_name]
             if unknown:
                 raise CommandError(f"Unknown project unit(s): {', '.join(unknown)}")
@@ -277,7 +288,13 @@ class Command(TyperCommand):
                         verb(unit.filename)
                     except subprocess.CalledProcessError as err:
                         typer.secho(describe_failure(err), err=True)
-            if self.ctl.uninstall_unit(unit.filename):
+            try:
+                removed = self.ctl.uninstall_unit(unit.filename)
+            except OSError as err:
+                raise CommandError(
+                    f"Failed to remove {unit.filename} from {self.ctl.unit_dir}: {err}"
+                ) from err
+            if removed:
                 typer.echo(f"removed {unit.filename}")
         if self.ctl.available:
             self.run_ctl(self.ctl.daemon_reload)

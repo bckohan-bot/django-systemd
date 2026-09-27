@@ -485,6 +485,19 @@ class TestUninstall:
         assert ("daemon-reload", "") in fake_ctl.calls
         assert "Unit not enabled" in capsys.readouterr().err
 
+    def test_uninstall_failure_names_the_unit(self, fake_ctl):
+        call_command("systemd", "install")
+
+        def flaky(name):
+            raise OSError("permission denied")
+
+        fake_ctl.uninstall_unit = flaky  # type: ignore[method-assign]
+        with pytest.raises(CommandError) as exc_info:
+            call_command("systemd", "uninstall")
+        message = str(exc_info.value)
+        assert "permission denied" in message
+        assert str(fake_ctl.unit_dir) in message
+
     def test_without_systemctl_still_removes(self, make_ctl, capsys):
         ctl = make_ctl(available=False)
         call_command("systemd", "install")
@@ -545,7 +558,9 @@ class TestRestart:
         assert fake_ctl.calls == []
 
     def test_template_unit_is_not_a_target(self, fake_ctl):
-        with pytest.raises(CommandError, match="app@.target"):
+        with pytest.raises(
+            CommandError, match="Template units cannot be restarted directly"
+        ):
             call_command("systemd", "restart", "app@.target")
 
     def test_nothing_installed_is_a_noop(self, fake_ctl, capsys):

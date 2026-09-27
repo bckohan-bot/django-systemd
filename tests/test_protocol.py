@@ -206,6 +206,15 @@ class TestSubprocessSystemdCtl:
         with pytest.raises(ValueError):
             ctl.is_installed(name)
 
+    @mock.patch("django_systemd.protocol.os.replace", side_effect=OSError("boom"))
+    def test_install_failure_cleans_up_staged_file(self, _replace, tmp_path):
+        ctl = self._ctl(tmp_path)
+        source = tmp_path / "web.service"
+        source.write_text("x")
+        with pytest.raises(OSError):
+            ctl.install_unit(source)
+        assert not (ctl.unit_dir / "web.service.tmp").exists()
+
     def test_install_replaces_symlink_instead_of_writing_through(self, tmp_path):
         ctl = self._ctl(tmp_path)
         ctl.unit_dir.mkdir(parents=True)

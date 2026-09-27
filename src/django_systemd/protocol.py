@@ -192,9 +192,13 @@ class SubprocessSystemdCtl:
         destination = self._unit_path(name if name is not None else source.name)
         self.unit_dir.mkdir(parents=True, exist_ok=True)
         staged = destination.with_name(destination.name + ".tmp")
-        shutil.copyfile(source, staged)
-        staged.chmod(mode)
-        os.replace(staged, destination)
+        try:
+            shutil.copyfile(source, staged)
+            staged.chmod(mode)
+            os.replace(staged, destination)
+        except OSError:
+            staged.unlink(missing_ok=True)
+            raise
         return destination
 
     def uninstall_unit(self, name: str) -> bool:
