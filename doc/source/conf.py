@@ -53,8 +53,15 @@ extensions = [
     'sphinxcontrib.typer',
     'sphinx_tabs.tabs',
     "sphinx.ext.viewcode",
-    'sphinx.ext.intersphinx'
+    'sphinx.ext.intersphinx',
+    "sphinx.ext.autosectionlabel",
 ]
+
+# Prepend the document name and a slash to the target header
+autosectionlabel_prefix_document = True
+
+# Optional: Limit how deep Sphinx goes to create labels (None = all sections)
+autosectionlabel_maxdepth = None
 
 autodoc_use_legacy_class_based = True
 

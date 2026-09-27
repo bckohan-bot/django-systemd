@@ -14,6 +14,7 @@ Django Systemd
 
    tutorial
    howto
+   command
    settings
    reference/index
    changelog
