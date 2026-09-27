@@ -105,6 +105,7 @@ def template_engine_config() -> dict[str, t.Any]:
                             "render_static.loaders.StaticAppDirectoriesBatchLoader"
                         ],
                         "builtins": ["render_static.templatetags.render_static"],
+                        "autoescape": False,
                     },
                 }
             ]

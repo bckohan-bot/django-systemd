@@ -233,6 +233,17 @@ class TestRender:
         assert "WorkingDirectory=/srv/app/.venv" in content
         assert "ExecStart=/srv/app/.venv/bin/python" in content
 
+    def test_renders_without_html_autoescaping(self, fake_ctl, tmp_path):
+        call_command(
+            "systemd",
+            "render",
+            str(tmp_path),
+            "-c",
+            "python=/a&b/'py'",
+        )
+        content = (tmp_path / "web.service").read_text()
+        assert "ExecStart=/a&b/'py'" in content
+
     def test_bad_context_pair(self, fake_ctl, tmp_path):
         with pytest.raises(CommandError, match="KEY=VALUE"):
             call_command("systemd", "render", str(tmp_path), "-c", "novalue")

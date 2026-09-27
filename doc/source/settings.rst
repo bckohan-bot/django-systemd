@@ -29,6 +29,9 @@ A number of convenient environment context variables are added to the context. S
     of overriding the entire setting, consider using the :setting:`SYSTEMD_TEMPLATES` and
     :setting:`SYSTEMD_TEMPLATE_CONTEXT` settings
 
+Unit files are not HTML, so autoescaping is off by default; if you supply your
+own engine configuration, set it off too.
+
 Default:
 
 .. code-block:: python
@@ -43,7 +46,8 @@ Default:
                 ],
                 "loaders": [
                     "render_static.loaders.StaticAppDirectoriesBatchLoader"
-                ]
+                ],
+                "autoescape": False
             }
         }],
         "context": {
