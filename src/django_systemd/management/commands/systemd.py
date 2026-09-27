@@ -148,7 +148,7 @@ class Command(TyperCommand):
         rendered: list[tuple[ServiceUnit, Path]] = []
         for unit in self.units:
             # Absolute: render-static 3.5 builds a Path from a SafeString, which
-            # Python 3.10 rejects for a single relative path part.
+            # Python 3.11 rejects for a single relative path part.
             target = dest.absolute() / unit.filename
             try:
                 for render in render_engine().render_each(

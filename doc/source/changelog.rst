@@ -8,6 +8,7 @@ v0.1.0 (unreleased)
 ===================
 
 * Initial Release.
+* Requires Python 3.11 or later and Django 5.2 or later.
 * Apps bundle systemd unit templates in a ``systemd/`` directory. The set of
   templates matching :setting:`SYSTEMD_TEMPLATES` forms the project's unit
   manifest (:func:`~django_systemd.config.project_units`).
