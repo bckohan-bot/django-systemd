@@ -58,7 +58,9 @@ class SystemdCtl(Protocol):
         """
         True if a systemctl binary is on PATH. This does not check that the user
         manager is reachable; callers must check it before calling any other
-        method, which raise FileNotFoundError when systemctl is absent.
+        systemctl-backed method, which raise FileNotFoundError when systemctl is
+        absent. ``is_installed``, ``install_unit`` and ``uninstall_unit`` are
+        filesystem-only and do not require this check.
         """
         ...
 
@@ -161,12 +163,20 @@ class SubprocessSystemdCtl:
         self._systemctl("disable", unit)
 
     def is_active(self, unit: str) -> bool:
-        state = self._systemctl("is-active", unit, check=False).stdout.strip()
-        return state in self._ACTIVE_STATES
+        result = self._systemctl("is-active", unit, check=False)
+        if result.returncode != 0 and not result.stdout:
+            raise subprocess.CalledProcessError(
+                result.returncode, result.argv, result.stdout, result.stderr
+            )
+        return result.stdout.strip() in self._ACTIVE_STATES
 
     def is_enabled(self, unit: str) -> bool:
-        state = self._systemctl("is-enabled", unit, check=False).stdout.strip()
-        return state in self._ENABLED_STATES
+        result = self._systemctl("is-enabled", unit, check=False)
+        if result.returncode != 0 and not result.stdout:
+            raise subprocess.CalledProcessError(
+                result.returncode, result.argv, result.stdout, result.stderr
+            )
+        return result.stdout.strip() in self._ENABLED_STATES
 
     def _unit_path(self, name: str) -> Path:
         if not name or Path(name).name != name:

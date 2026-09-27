@@ -77,10 +77,12 @@ class FakeCtl:
         self.enabled.discard(unit)
 
     def is_active(self, unit: str) -> bool:
+        self._maybe_fail("is-active", unit)
         self.calls.append(("is-active", unit))
         return unit in self.active
 
     def is_enabled(self, unit: str) -> bool:
+        self._maybe_fail("is-enabled", unit)
         self.calls.append(("is-enabled", unit))
         return unit in self.enabled
 
@@ -187,6 +189,13 @@ class TestList:
         row = next(line for line in out.splitlines() if line.startswith("app@.target"))
         assert row.split()[1:4] == ["yes", "-", "-"]
         assert fake_ctl.calls == []
+
+    def test_unreachable_bus_is_a_command_error(self, fake_ctl):
+        fake_ctl.unit_dir.mkdir(parents=True)
+        (fake_ctl.unit_dir / "web.service").write_text("x")
+        fake_ctl.fail = {"is-active": "Failed to connect to bus"}
+        with pytest.raises(CommandError, match="Failed to connect to bus"):
+            call_command("systemd", "list")
 
     def test_unavailable_systemctl_shows_dashes(self, make_ctl, capsys):
         ctl = make_ctl(available=False)

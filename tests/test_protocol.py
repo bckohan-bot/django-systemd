@@ -120,6 +120,13 @@ class TestSubprocessSystemdCtl:
             "web.service",
         ]
 
+    @mock.patch("django_systemd.protocol.subprocess.run")
+    def test_is_active_unreachable_bus_raises(self, run, tmp_path):
+        run.return_value = completed(1, "", "Failed to connect to bus")
+        with pytest.raises(subprocess.CalledProcessError) as exc:
+            self._ctl(tmp_path).is_active("web.service")
+        assert exc.value.stderr == "Failed to connect to bus"
+
     @pytest.mark.parametrize(
         "stdout,expected",
         [
@@ -134,6 +141,13 @@ class TestSubprocessSystemdCtl:
     def test_is_enabled(self, run, stdout, expected, tmp_path):
         run.return_value = completed(0 if expected else 1, stdout)
         assert self._ctl(tmp_path).is_enabled("web.service") is expected
+
+    @mock.patch("django_systemd.protocol.subprocess.run")
+    def test_is_enabled_unreachable_bus_raises(self, run, tmp_path):
+        run.return_value = completed(1, "", "Failed to connect to bus")
+        with pytest.raises(subprocess.CalledProcessError) as exc:
+            self._ctl(tmp_path).is_enabled("web.service")
+        assert exc.value.stderr == "Failed to connect to bus"
 
     @pytest.mark.parametrize(
         "stdout,expected", [("yes\n", True), ("no\n", False), ("", False)]

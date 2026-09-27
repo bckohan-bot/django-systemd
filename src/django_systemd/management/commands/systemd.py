@@ -169,8 +169,11 @@ class Command(TyperCommand):
             installed = self.ctl.is_installed(unit.filename)
             enabled = active = "-"
             if installed and available and not unit.instanceable:
-                enabled = "yes" if self.ctl.is_enabled(unit.filename) else "no"
-                active = "yes" if self.ctl.is_active(unit.filename) else "no"
+                try:
+                    enabled = "yes" if self.ctl.is_enabled(unit.filename) else "no"
+                    active = "yes" if self.ctl.is_active(unit.filename) else "no"
+                except subprocess.CalledProcessError as err:
+                    raise CommandError(describe_failure(err)) from err
             typer.echo(
                 f"{unit.filename:<{width}} {'yes' if installed else 'no':<10} "
                 f"{enabled:<8} {active:<8} {unit.path}"
