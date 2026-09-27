@@ -122,7 +122,9 @@ class Command(TyperCommand):
         dest.mkdir(parents=True, exist_ok=True)
         rendered: list[tuple[ServiceUnit, Path]] = []
         for unit in self.units:
-            target = dest / unit.filename
+            # Absolute: render-static 3.5 builds a Path from a SafeString, which
+            # Python 3.10 rejects for a single relative path part.
+            target = dest.absolute() / unit.filename
             try:
                 for render in render_engine().render_each(
                     unit.template, dest=target, context=context or None

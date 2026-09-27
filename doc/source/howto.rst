@@ -101,11 +101,11 @@ Django settings must still load successfully on the host.
 Render and install at deploy time
 ---------------------------------
 
-On the host, with production settings active:
-
 ``--enable`` makes the units start with the user manager at login or boot; it
 does not start them now. ``restart`` starts units that are not running and
 restarts the ones that are.
+
+On the host, with production settings active:
 
 .. code-block:: bash
 
